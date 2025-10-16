@@ -1,0 +1,11 @@
+# Streamlit Web Application Dependencies
+# Core web framework
+streamlit==1.28.1
+
+# Image processing
+Pillow==10.0.1
+
+# Data handling and manipulation
+pandas==2.1.2
+
+# Note: sqlite3 is included in Python's standard library, no need to install separately
