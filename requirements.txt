@@ -1,11 +1,20 @@
 # Streamlit Web Application Dependencies
 # Core web framework
-streamlit==1.28.1
+streamlit>=1.28.1
 
 # Image processing
-Pillow==10.0.1
+Pillow>=10.0.0
+pillow-heif>=0.13.0
 
 # Data handling and manipulation
-pandas==2.1.2
+pandas>=2.1.0
+
+# AI and geolocation
+google-generativeai>=0.3.0
+geopy>=2.4.0
+
+# Phase 2: Map visualization
+folium>=0.15.0
+streamlit-folium>=0.15.0
 
 # Note: sqlite3 is included in Python's standard library, no need to install separately
