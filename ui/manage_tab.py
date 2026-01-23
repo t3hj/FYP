@@ -1,5 +1,6 @@
 """
 Manage Reports tab for Local Lens application.
+Includes admin authentication for destructive actions.
 """
 import streamlit as st
 
@@ -11,15 +12,57 @@ from database import (
 from styles import get_tab_header, TAB_GRADIENTS
 
 
+# Admin password - in production, use st.secrets["ADMIN_PASSWORD"]
+def get_admin_password():
+    """Get admin password from secrets or use default for demo"""
+    try:
+        return st.secrets.get("ADMIN_PASSWORD", "admin123")
+    except:
+        return "admin123"  # Default for local development
+
+
+def check_admin_auth():
+    """Check if admin is authenticated in session"""
+    return st.session_state.get("admin_authenticated", False)
+
+
 def manage_reports_tab():
-    """Tab 3: Manage existing reports"""
+    """Tab 3: Manage existing reports (admin protected)"""
     
     # Header card
     st.markdown(get_tab_header(
         "⚙️ Manage Reports",
-        "Update status, priority, or edit report details",
+        "Update status, priority, or edit report details (Admin only)",
         TAB_GRADIENTS['manage']
     ), unsafe_allow_html=True)
+    
+    # Admin authentication section
+    if not check_admin_auth():
+        st.warning("🔒 This section requires admin authentication to prevent unauthorized changes.")
+        
+        with st.form("admin_login"):
+            st.write("### Admin Login")
+            password = st.text_input("Enter admin password", type="password")
+            
+            if st.form_submit_button("🔓 Login"):
+                if password == get_admin_password():
+                    st.session_state.admin_authenticated = True
+                    st.success("✅ Authentication successful!")
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect password")
+        
+        st.info("💡 For demo purposes, contact the developer for access.")
+        return
+    
+    # Show logout option
+    col_logout, col_spacer = st.columns([1, 4])
+    with col_logout:
+        if st.button("🔒 Logout"):
+            st.session_state.admin_authenticated = False
+            st.rerun()
+    
+    st.success("✅ Logged in as Admin")
     
     # Get all reports
     all_reports = get_all_reports()

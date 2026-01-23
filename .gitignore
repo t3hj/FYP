@@ -15,6 +15,9 @@ ENV/
 env/
 venv/
 
+# Streamlit secrets (contains passwords)
+.streamlit/secrets.toml
+
 # IDE
 .vscode/
 .idea/

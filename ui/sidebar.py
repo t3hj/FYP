@@ -79,3 +79,7 @@ def display_sidebar():
             <p>Made with ❤️ for communities</p>
         </div>
         """, unsafe_allow_html=True)
+        
+        # Demo disclaimer
+        st.markdown("---")
+        st.caption("🧪 **Prototype Demo** - This is a university FYP project. Data may be reset periodically.")
