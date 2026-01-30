@@ -48,11 +48,17 @@ def export_data_tab():
         st.write("### 📊 Data Preview")
         st.write("Preview the data before exporting.")
         
-        # Create preview DataFrame
-        df = pd.DataFrame(reports, columns=[
-            'ID', 'Image Path', 'Category', 'Location',
-            'Additional Details', 'Timestamp', 'Status', 'Priority'
-        ])
+        # Create preview DataFrame - handle both old (8 cols) and new (9 cols with email) records
+        if reports and len(reports[0]) >= 9:
+            df = pd.DataFrame(reports, columns=[
+                'ID', 'Image Path', 'Category', 'Location',
+                'Additional Details', 'Timestamp', 'Status', 'Priority', 'Email'
+            ])
+        else:
+            df = pd.DataFrame(reports, columns=[
+                'ID', 'Image Path', 'Category', 'Location',
+                'Additional Details', 'Timestamp', 'Status', 'Priority'
+            ])
         
         # Show preview with limited columns
         preview_df = df[['ID', 'Category', 'Location', 'Status', 'Priority', 'Timestamp']]

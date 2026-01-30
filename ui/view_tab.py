@@ -80,7 +80,12 @@ def view_and_filter_tab():
             # Display filtered reports in a table
             df_data = []
             for report in reports:
-                report_id, image_path, category, location, additional_details, timestamp, status, priority = report
+                # Handle both old records (8 columns) and new records (9 columns with email)
+                if len(report) >= 9:
+                    report_id, image_path, category, location, additional_details, timestamp, status, priority, email = report
+                else:
+                    report_id, image_path, category, location, additional_details, timestamp, status, priority = report
+                    email = None
                 df_data.append({
                     'ID': report_id,
                     'Category': category,
@@ -98,7 +103,12 @@ def view_and_filter_tab():
             st.subheader("📋 Report Details")
             
             for report in reports:
-                report_id, image_path, category, location, additional_details, timestamp, status, priority = report
+                # Handle both old records (8 columns) and new records (9 columns with email)
+                if len(report) >= 9:
+                    report_id, image_path, category, location, additional_details, timestamp, status, priority, email = report
+                else:
+                    report_id, image_path, category, location, additional_details, timestamp, status, priority = report
+                    email = None
                 
                 with st.expander(f"Report #{report_id} - {category}"):
                     col1, col2 = st.columns([1, 2])
@@ -113,6 +123,8 @@ def view_and_filter_tab():
                         st.write(f"**Priority:** {priority}")
                         st.write(f"**Status:** {status}")
                         st.write(f"**Submitted:** {timestamp}")
+                        if email:
+                            st.write(f"**Contact Email:** {email}")
                         if additional_details:
                             st.write(f"**Details:** {additional_details}")
         else:

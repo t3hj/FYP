@@ -81,7 +81,12 @@ def manage_reports_tab():
     
     if selected_index is not None:
         selected_report = all_reports[selected_index]
-        report_id, image_path, category, location, additional_details, timestamp, status, priority = selected_report
+        # Handle both old records (8 columns) and new records (9 columns with email)
+        if len(selected_report) >= 9:
+            report_id, image_path, category, location, additional_details, timestamp, status, priority, email = selected_report
+        else:
+            report_id, image_path, category, location, additional_details, timestamp, status, priority = selected_report
+            email = None
         
         # Display report details
         st.markdown("---")
@@ -101,6 +106,8 @@ def manage_reports_tab():
             st.write(f"**Location:** {location}")
             st.write(f"**Current Status:** {status}")
             st.write(f"**Current Priority:** {priority}")
+            if email:
+                st.write(f"**Contact Email:** {email}")
             if additional_details:
                 st.write(f"**Details:** {additional_details}")
         

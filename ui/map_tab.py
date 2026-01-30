@@ -29,7 +29,12 @@ def map_view_tab():
     # Extract reports with GPS coordinates
     map_reports = []
     for report in reports:
-        report_id, image_path, category, location, additional_details, timestamp, status, priority = report
+        # Handle both old records (8 columns) and new records (9 columns with email)
+        if len(report) >= 9:
+            report_id, image_path, category, location, additional_details, timestamp, status, priority, email = report
+        else:
+            report_id, image_path, category, location, additional_details, timestamp, status, priority = report
+            email = None
         
         # Try to extract GPS from location string if it contains coordinates
         if "Coordinates:" in location:

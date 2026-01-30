@@ -40,6 +40,9 @@ def create_database():
         if 'additional_details' not in columns:
             cursor.execute("ALTER TABLE reports ADD COLUMN additional_details TEXT")
         
+        if 'email' not in columns:
+            cursor.execute("ALTER TABLE reports ADD COLUMN email TEXT")
+        
         conn.commit()
         
     except sqlite3.Error as e:
@@ -49,7 +52,7 @@ def create_database():
             conn.close()
 
 
-def insert_report(image_path, category, location, additional_details=None):
+def insert_report(image_path, category, location, additional_details=None, email=None):
     """Insert a new record into the reports table
     
     Args:
@@ -57,6 +60,7 @@ def insert_report(image_path, category, location, additional_details=None):
         category (str): Issue category
         location (str): Location description
         additional_details (str, optional): Additional information about the issue
+        email (str, optional): Contact email for follow-up
         
     Returns:
         int: Report ID if successful, None otherwise
@@ -66,9 +70,9 @@ def insert_report(image_path, category, location, additional_details=None):
         conn = sqlite3.connect(str(DATABASE_PATH))
         cursor = conn.cursor()
         cursor.execute(
-            '''INSERT INTO reports (image_path, category, location, additional_details) 
-               VALUES (?, ?, ?, ?)''',
-            (image_path, category, location, additional_details)
+            '''INSERT INTO reports (image_path, category, location, additional_details, email) 
+               VALUES (?, ?, ?, ?, ?)''',
+            (image_path, category, location, additional_details, email)
         )
         conn.commit()
         return cursor.lastrowid
@@ -351,9 +355,15 @@ def export_reports_to_csv():
     if not reports:
         return None
     
-    # Create DataFrame
-    df = pd.DataFrame(reports, columns=[
-        'ID', 'Image Path', 'Category', 'Location', 
-        'Additional Details', 'Timestamp', 'Status', 'Priority'
-    ])
+    # Create DataFrame - handle both old (8 cols) and new (9 cols with email) records
+    if reports and len(reports[0]) >= 9:
+        df = pd.DataFrame(reports, columns=[
+            'ID', 'Image Path', 'Category', 'Location', 
+            'Additional Details', 'Timestamp', 'Status', 'Priority', 'Email'
+        ])
+    else:
+        df = pd.DataFrame(reports, columns=[
+            'ID', 'Image Path', 'Category', 'Location', 
+            'Additional Details', 'Timestamp', 'Status', 'Priority'
+        ])
     return df.to_csv(index=False)

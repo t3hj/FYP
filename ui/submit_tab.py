@@ -141,6 +141,13 @@ def submit_report_tab():
             help="Provide any extra details that might help address the issue."
         )
         
+        # Contact email (optional)
+        email = st.text_input(
+            "Contact Email (Optional)",
+            placeholder="your.email@example.com",
+            help="Provide your email if you'd like the council to follow up with you about this report."
+        )
+        
         # Submit button
         submitted = st.form_submit_button("📤 Submit Report", type="primary")
         
@@ -155,8 +162,8 @@ def submit_report_tab():
                 # Save file with unique name
                 file_path = save_uploaded_file(uploaded_file)
                 
-                # Insert into database
-                report_id = insert_report(file_path, category, location, additional_details)
+                # Insert into database (email can be empty string or None)
+                report_id = insert_report(file_path, category, location, additional_details, email if email else None)
                 
                 if report_id:
                     st.success(f"✅ Report submitted successfully! Report ID: #{report_id}")
