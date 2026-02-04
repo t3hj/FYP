@@ -7,8 +7,9 @@ import streamlit as st
 from config import ISSUE_CATEGORIES, STATUS_OPTIONS, PRIORITY_OPTIONS
 from database import (
     get_all_reports, update_report_status, update_report_priority,
-    update_report, delete_report
+    update_report, delete_report, get_similar_reports_count, get_report_clusters
 )
+from utils import get_community_urgency_badge, get_urgency_indicator
 from styles import get_tab_header, TAB_GRADIENTS
 
 
@@ -71,8 +72,40 @@ def manage_reports_tab():
         st.info("No reports to manage. Submit a report first!")
         return
     
-    # Create a selectbox for choosing report
-    report_options = [f"#{r[0]} - {r[2]} - {r[3][:30]}..." for r in all_reports]
+    # Show Community Urgency Overview (Issue Clusters)
+    st.markdown("---")
+    st.subheader("🔥 Community Urgency Overview")
+    st.caption("Issues reported by multiple community members - prioritize these for faster response!")
+    
+    clusters = get_report_clusters()
+    if clusters:
+        cluster_cols = st.columns(min(len(clusters), 4))
+        for i, cluster in enumerate(clusters[:4]):
+            with cluster_cols[i]:
+                urgency_icon = "🔥🔥🔥" if cluster['count'] >= 5 else "🔥🔥" if cluster['count'] >= 3 else "🔥"
+                st.metric(
+                    label=f"{urgency_icon} {cluster['category']}",
+                    value=f"{cluster['count']} reports",
+                    delta="High priority" if cluster['count'] >= 3 else "Monitor"
+                )
+    else:
+        st.info("No issue clusters detected. Each report appears to be unique.")
+    
+    st.markdown("---")
+    
+    # Create a selectbox for choosing report with urgency indicators
+    report_options = []
+    for r in all_reports:
+        report_id = r[0]
+        category = r[2]
+        location = r[3][:30]
+        # Get GPS coords if available
+        latitude = r[9] if len(r) > 9 else None
+        longitude = r[10] if len(r) > 10 else None
+        similar_count = get_similar_reports_count(report_id, category, latitude, longitude)
+        urgency = get_urgency_indicator(similar_count)
+        report_options.append(f"{urgency} #{report_id} - {category} - {location}..." + (f" (+{similar_count} similar)" if similar_count > 0 else ""))
+    
     selected_index = st.selectbox(
         "Select Report to Manage",
         options=range(len(all_reports)),
@@ -81,15 +114,34 @@ def manage_reports_tab():
     
     if selected_index is not None:
         selected_report = all_reports[selected_index]
-        # Handle both old records (8 columns) and new records (9 columns with email)
-        if len(selected_report) >= 9:
+        # Handle records with varying column counts (8, 9, or 11 with GPS)
+        if len(selected_report) >= 11:
+            report_id, image_path, category, location, additional_details, timestamp, status, priority, email, latitude, longitude = selected_report
+        elif len(selected_report) >= 9:
             report_id, image_path, category, location, additional_details, timestamp, status, priority, email = selected_report
+            latitude, longitude = None, None
         else:
             report_id, image_path, category, location, additional_details, timestamp, status, priority = selected_report
-            email = None
+            email, latitude, longitude = None, None, None
+        
+        # Calculate community urgency
+        similar_count = get_similar_reports_count(report_id, category, latitude, longitude)
+        if similar_count >= 5:
+            urgency_level = "Critical"
+        elif similar_count >= 3:
+            urgency_level = "High"
+        elif similar_count >= 1:
+            urgency_level = "Elevated"
+        else:
+            urgency_level = "Normal"
         
         # Display report details
         st.markdown("---")
+        
+        # Show community urgency badge if applicable
+        if similar_count > 0:
+            st.markdown(get_community_urgency_badge(similar_count, urgency_level), unsafe_allow_html=True)
+            st.warning(f"⚠️ **Community Priority**: {similar_count} other community member(s) reported similar issues at this location. Consider prioritizing!")
         
         col1, col2 = st.columns([1, 2])
         

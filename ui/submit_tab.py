@@ -51,6 +51,10 @@ def submit_report_tab():
         st.session_state.suggested_category = None
     if 'last_analyzed_file' not in st.session_state:
         st.session_state.last_analyzed_file = None
+    if 'extracted_latitude' not in st.session_state:
+        st.session_state.extracted_latitude = None
+    if 'extracted_longitude' not in st.session_state:
+        st.session_state.extracted_longitude = None
     
     st.subheader("📝 Submit New Report")
     
@@ -74,6 +78,10 @@ def submit_report_tab():
             lat, lon = extract_gps_from_image(temp_path)
             
             if lat and lon:
+                # Store GPS coordinates for database
+                st.session_state.extracted_latitude = lat
+                st.session_state.extracted_longitude = lon
+                
                 # Get address from coordinates
                 address = get_address_from_coordinates(lat, lon)
                 if address:
@@ -84,6 +92,8 @@ def submit_report_tab():
                     st.info("📍 GPS coordinates found, but couldn't get address.")
             else:
                 st.session_state.extracted_location = ""
+                st.session_state.extracted_latitude = None
+                st.session_state.extracted_longitude = None
                 st.info("📍 No GPS data in image. Please enter location manually.")
             
             # Try AI category detection
@@ -162,8 +172,15 @@ def submit_report_tab():
                 # Save file with unique name
                 file_path = save_uploaded_file(uploaded_file)
                 
-                # Insert into database (email can be empty string or None)
-                report_id = insert_report(file_path, category, location, additional_details, email if email else None)
+                # Get GPS coordinates from session state
+                latitude = st.session_state.get('extracted_latitude')
+                longitude = st.session_state.get('extracted_longitude')
+                
+                # Insert into database with GPS coordinates
+                report_id = insert_report(
+                    file_path, category, location, additional_details, 
+                    email if email else None, latitude, longitude
+                )
                 
                 if report_id:
                     st.success(f"✅ Report submitted successfully! Report ID: #{report_id}")
@@ -173,6 +190,8 @@ def submit_report_tab():
                     st.session_state.extracted_location = ""
                     st.session_state.suggested_category = None
                     st.session_state.last_analyzed_file = None
+                    st.session_state.extracted_latitude = None
+                    st.session_state.extracted_longitude = None
                 else:
                     st.error("❌ Failed to submit report. Please try again.")
 
@@ -184,7 +203,13 @@ def submit_report_tab():
         if recent_reports:
             st.subheader("📋 Recent Reports")
             for report in recent_reports:
-                report_id, image_path, cat, loc, details, timestamp, status, priority = report
+                # Handle records with varying column counts
+                if len(report) >= 11:
+                    report_id, image_path, cat, loc, details, timestamp, status, priority, email, lat, lon = report
+                elif len(report) >= 9:
+                    report_id, image_path, cat, loc, details, timestamp, status, priority, email = report
+                else:
+                    report_id, image_path, cat, loc, details, timestamp, status, priority = report
                 
                 with st.expander(f"Report #{report_id} - {cat} ({status})"):
                     col1, col2 = st.columns([1, 2])

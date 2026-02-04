@@ -151,6 +151,60 @@ def get_status_badge(status):
     return f'<span style="background-color: {bg}; color: {text}; padding: 3px 10px; border-radius: 12px; font-size: 0.85rem; font-weight: 500;">{status}</span>'
 
 
+def get_community_urgency_badge(similar_count, urgency_level):
+    """Return HTML for a community urgency badge
+    
+    Displays how many community members have reported similar issues,
+    helping council prioritize high-impact problems.
+    
+    Args:
+        similar_count (int): Number of similar reports
+        urgency_level (str): Urgency level (Critical, High, Elevated, Normal)
+        
+    Returns:
+        str: HTML badge string
+    """
+    if similar_count == 0:
+        return ""
+    
+    # Colors for different urgency levels
+    urgency_colors = {
+        'Critical': ('#dc3545', 'white', '🔥🔥'),
+        'High': ('#fd7e14', 'white', '🔥'),
+        'Elevated': ('#ffc107', 'black', '⚠️'),
+        'Normal': ('#6c757d', 'white', '')
+    }
+    
+    bg, text, icon = urgency_colors.get(urgency_level, ('#6c757d', 'white', ''))
+    
+    report_text = "report" if similar_count == 1 else "reports"
+    
+    return f'''<span style="background-color: {bg}; color: {text}; padding: 4px 12px; 
+               border-radius: 12px; font-size: 0.85rem; font-weight: 600; 
+               display: inline-flex; align-items: center; gap: 4px;
+               box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+               {icon} +{similar_count} similar {report_text}
+               </span>'''
+
+
+def get_urgency_indicator(similar_count):
+    """Return a simple urgency indicator for compact displays
+    
+    Args:
+        similar_count (int): Number of similar reports
+        
+    Returns:
+        str: Emoji indicator string
+    """
+    if similar_count >= 5:
+        return "🔥🔥🔥"  # Critical - many reports
+    elif similar_count >= 3:
+        return "🔥🔥"    # High urgency
+    elif similar_count >= 1:
+        return "🔥"      # Elevated
+    return ""            # Normal
+
+
 def get_category_icon(category):
     """Return emoji icon for a category"""
     return CATEGORY_ICONS.get(category, '📌')

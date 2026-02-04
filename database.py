@@ -4,6 +4,7 @@ All SQLite database functions are centralized here.
 """
 import sqlite3
 import pandas as pd
+from math import cos, radians
 from config import DATABASE_PATH
 
 
@@ -43,6 +44,13 @@ def create_database():
         if 'email' not in columns:
             cursor.execute("ALTER TABLE reports ADD COLUMN email TEXT")
         
+        # Add GPS coordinate columns for proximity detection
+        if 'latitude' not in columns:
+            cursor.execute("ALTER TABLE reports ADD COLUMN latitude REAL")
+        
+        if 'longitude' not in columns:
+            cursor.execute("ALTER TABLE reports ADD COLUMN longitude REAL")
+        
         conn.commit()
         
     except sqlite3.Error as e:
@@ -52,7 +60,7 @@ def create_database():
             conn.close()
 
 
-def insert_report(image_path, category, location, additional_details=None, email=None):
+def insert_report(image_path, category, location, additional_details=None, email=None, latitude=None, longitude=None):
     """Insert a new record into the reports table
     
     Args:
@@ -61,6 +69,8 @@ def insert_report(image_path, category, location, additional_details=None, email
         location (str): Location description
         additional_details (str, optional): Additional information about the issue
         email (str, optional): Contact email for follow-up
+        latitude (float, optional): GPS latitude coordinate
+        longitude (float, optional): GPS longitude coordinate
         
     Returns:
         int: Report ID if successful, None otherwise
@@ -70,9 +80,9 @@ def insert_report(image_path, category, location, additional_details=None, email
         conn = sqlite3.connect(str(DATABASE_PATH))
         cursor = conn.cursor()
         cursor.execute(
-            '''INSERT INTO reports (image_path, category, location, additional_details, email) 
-               VALUES (?, ?, ?, ?, ?)''',
-            (image_path, category, location, additional_details, email)
+            '''INSERT INTO reports (image_path, category, location, additional_details, email, latitude, longitude) 
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (image_path, category, location, additional_details, email, latitude, longitude)
         )
         conn.commit()
         return cursor.lastrowid
@@ -355,8 +365,14 @@ def export_reports_to_csv():
     if not reports:
         return None
     
-    # Create DataFrame - handle both old (8 cols) and new (9 cols with email) records
-    if reports and len(reports[0]) >= 9:
+    # Create DataFrame - handle records with GPS columns
+    if reports and len(reports[0]) >= 11:
+        df = pd.DataFrame(reports, columns=[
+            'ID', 'Image Path', 'Category', 'Location', 
+            'Additional Details', 'Timestamp', 'Status', 'Priority', 'Email',
+            'Latitude', 'Longitude'
+        ])
+    elif reports and len(reports[0]) >= 9:
         df = pd.DataFrame(reports, columns=[
             'ID', 'Image Path', 'Category', 'Location', 
             'Additional Details', 'Timestamp', 'Status', 'Priority', 'Email'
@@ -367,3 +383,163 @@ def export_reports_to_csv():
             'Additional Details', 'Timestamp', 'Status', 'Priority'
         ])
     return df.to_csv(index=False)
+
+
+def get_similar_reports_count(report_id, category, latitude=None, longitude=None, proximity_km=0.5):
+    """Get count of similar reports (same category within proximity)
+    
+    This helps identify issues reported by multiple community members,
+    indicating higher urgency for council attention.
+    
+    Args:
+        report_id (int): Current report ID (to exclude from count)
+        category (str): Issue category to match
+        latitude (float, optional): GPS latitude for proximity check
+        longitude (float, optional): GPS longitude for proximity check
+        proximity_km (float): Radius in kilometers to consider as "nearby" (default 0.5km)
+    
+    Returns:
+        int: Number of similar reports
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(str(DATABASE_PATH))
+        cursor = conn.cursor()
+        
+        if latitude is not None and longitude is not None:
+            # Use Haversine formula approximation for proximity
+            # 1 degree latitude ≈ 111km, 1 degree longitude varies by latitude
+            lat_range = proximity_km / 111.0
+            lon_range = proximity_km / (111.0 * abs(cos(radians(latitude))) if latitude else 111.0)
+            
+            cursor.execute("""
+                SELECT COUNT(*) FROM reports 
+                WHERE id != ? 
+                AND category = ? 
+                AND status NOT IN ('Resolved', 'Closed')
+                AND latitude IS NOT NULL 
+                AND longitude IS NOT NULL
+                AND ABS(latitude - ?) < ?
+                AND ABS(longitude - ?) < ?
+            """, (report_id, category, latitude, lat_range, longitude, lon_range))
+        else:
+            # Fallback: just count same category reports (less accurate)
+            cursor.execute("""
+                SELECT COUNT(*) FROM reports 
+                WHERE id != ? 
+                AND category = ?
+                AND status NOT IN ('Resolved', 'Closed')
+            """, (report_id, category))
+        
+        return cursor.fetchone()[0]
+    
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_community_urgency_data():
+    """Get all reports with their community urgency scores
+    
+    Returns reports sorted by number of similar nearby reports,
+    helping council prioritize issues affecting multiple residents.
+    
+    Returns:
+        list: List of tuples (report_data, similar_count, urgency_level)
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(str(DATABASE_PATH))
+        cursor = conn.cursor()
+        
+        # Get all active reports (not resolved/closed)
+        cursor.execute("""
+            SELECT * FROM reports 
+            WHERE status NOT IN ('Resolved', 'Closed')
+            ORDER BY timestamp DESC
+        """)
+        reports = cursor.fetchall()
+        
+        urgency_data = []
+        for report in reports:
+            report_id = report[0]
+            category = report[2]
+            
+            # Get latitude/longitude (columns 9 and 10, 0-indexed)
+            latitude = report[9] if len(report) > 9 else None
+            longitude = report[10] if len(report) > 10 else None
+            
+            similar_count = get_similar_reports_count(
+                report_id, category, latitude, longitude
+            )
+            
+            # Determine urgency level based on similar reports
+            if similar_count >= 5:
+                urgency_level = "Critical"
+            elif similar_count >= 3:
+                urgency_level = "High"
+            elif similar_count >= 1:
+                urgency_level = "Elevated"
+            else:
+                urgency_level = "Normal"
+            
+            urgency_data.append((report, similar_count, urgency_level))
+        
+        # Sort by similar_count descending (highest urgency first)
+        urgency_data.sort(key=lambda x: x[1], reverse=True)
+        
+        return urgency_data
+    
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_report_clusters():
+    """Group similar reports into clusters for council overview
+    
+    Clusters reports by category and proximity to help council
+    see which issues have multiple community reports.
+    
+    Returns:
+        dict: Dictionary with cluster information
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(str(DATABASE_PATH))
+        cursor = conn.cursor()
+        
+        # Get category clusters with counts
+        cursor.execute("""
+            SELECT category, COUNT(*) as count,
+                   AVG(latitude) as avg_lat, AVG(longitude) as avg_lon
+            FROM reports 
+            WHERE status NOT IN ('Resolved', 'Closed')
+            GROUP BY category
+            HAVING count > 1
+            ORDER BY count DESC
+        """)
+        
+        clusters = []
+        for row in cursor.fetchall():
+            clusters.append({
+                'category': row[0],
+                'count': row[1],
+                'avg_latitude': row[2],
+                'avg_longitude': row[3]
+            })
+        
+        return clusters
+    
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
