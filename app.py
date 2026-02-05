@@ -22,7 +22,7 @@ from ui.map_tab import map_view_tab
 from ui.export_tab import export_data_tab
 
 # Import styles
-from styles import CUSTOM_CSS
+from styles import get_custom_css
 
 
 def main():
@@ -36,8 +36,8 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    # Apply custom CSS
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+    # Apply custom CSS (theme-aware)
+    st.markdown(get_custom_css(), unsafe_allow_html=True)
     
     # Initialize database
     create_database()

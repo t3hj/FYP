@@ -2,13 +2,14 @@
 Submit Report tab for Local Lens application.
 """
 import streamlit as st
+import time
 from PIL import Image
 
 from config import ISSUE_CATEGORIES, PRIORITY_OPTIONS, SUPPORTED_IMAGE_TYPES, MAX_IMAGE_SIZE_MB
 from database import insert_report, get_recent_reports
 from ai_analysis import analyze_image_with_ai
 from utils import save_uploaded_file, validate_inputs, extract_gps_from_image, get_address_from_coordinates
-from styles import get_tab_header, TAB_GRADIENTS
+from styles import get_tab_header, TAB_GRADIENTS, get_loading_animation
 
 
 def submit_report_tab():
@@ -70,39 +71,59 @@ def submit_report_tab():
     if uploaded_file is not None and uploaded_file != st.session_state.last_analyzed_file:
         st.session_state.last_analyzed_file = uploaded_file
         
-        with st.spinner("🤖 AI analyzing image..."):
-            # Save temporarily to extract GPS
-            temp_path = save_uploaded_file(uploaded_file)
+        # Show custom loading animation
+        loading_placeholder = st.empty()
+        loading_placeholder.markdown(
+            get_loading_animation(
+                "Analyzing your image...",
+                ["📍 Extracting GPS location...", "🤖 Detecting issue category..."]
+            ),
+            unsafe_allow_html=True
+        )
+        
+        # Save temporarily to extract GPS
+        temp_path = save_uploaded_file(uploaded_file)
+        
+        # Try to extract GPS coordinates
+        lat, lon = extract_gps_from_image(temp_path)
+        
+        # Clear loading and show results
+        loading_placeholder.empty()
+        
+        if lat and lon:
+            # Store GPS coordinates for database
+            st.session_state.extracted_latitude = lat
+            st.session_state.extracted_longitude = lon
             
-            # Try to extract GPS coordinates
-            lat, lon = extract_gps_from_image(temp_path)
-            
-            if lat and lon:
-                # Store GPS coordinates for database
-                st.session_state.extracted_latitude = lat
-                st.session_state.extracted_longitude = lon
-                
-                # Get address from coordinates
-                address = get_address_from_coordinates(lat, lon)
-                if address:
-                    st.session_state.extracted_location = f"{address}\n(Coordinates: {lat:.6f}, {lon:.6f})"
-                    st.success(f"📍 Location detected from image GPS data!")
-                else:
-                    st.session_state.extracted_location = f"Coordinates: {lat:.6f}, {lon:.6f}"
-                    st.info("📍 GPS coordinates found, but couldn't get address.")
+            # Get address from coordinates
+            address = get_address_from_coordinates(lat, lon)
+            if address:
+                st.session_state.extracted_location = f"{address}\n(Coordinates: {lat:.6f}, {lon:.6f})"
+                st.success(f"📍 Location detected from image GPS data!")
             else:
-                st.session_state.extracted_location = ""
-                st.session_state.extracted_latitude = None
-                st.session_state.extracted_longitude = None
-                st.info("📍 No GPS data in image. Please enter location manually.")
-            
-            # Try AI category detection
-            suggested = analyze_image_with_ai(uploaded_file)
-            if suggested:
-                st.session_state.suggested_category = suggested
-                st.success(f"🤖 AI suggests category: **{suggested}**")
-            else:
-                st.session_state.suggested_category = None
+                st.session_state.extracted_location = f"Coordinates: {lat:.6f}, {lon:.6f}"
+                st.info("📍 GPS coordinates found, but couldn't get address.")
+        else:
+            st.session_state.extracted_location = ""
+            st.session_state.extracted_latitude = None
+            st.session_state.extracted_longitude = None
+            st.info("📍 No GPS data in image. Please enter location manually.")
+        
+        # Try AI category detection with loading
+        loading_placeholder2 = st.empty()
+        loading_placeholder2.markdown(
+            get_loading_animation("AI categorizing issue...", ["🔍 Analyzing image content..."]),
+            unsafe_allow_html=True
+        )
+        
+        suggested = analyze_image_with_ai(uploaded_file)
+        loading_placeholder2.empty()
+        
+        if suggested:
+            st.session_state.suggested_category = suggested
+            st.success(f"🤖 AI suggests category: **{suggested}**")
+        else:
+            st.session_state.suggested_category = None
     
     # Display image preview
     if uploaded_file is not None:

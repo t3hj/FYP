@@ -51,14 +51,14 @@ def display_auth_header():
     with col2:
         if is_admin():
             st.markdown("👤 **Council Admin**")
-            if st.button("🔓 Logout", key="header_logout"):
+            if st.button("🔓 Logout", key="header_logout", type="primary"):
                 logout_admin()
                 st.rerun()
         else:
-            with st.popover("🔐 Council Login"):
+            with st.popover("🔐 Council Login", use_container_width=True):
                 st.markdown("**Council/Admin Access**")
                 password = st.text_input("Password", type="password", key="header_password")
-                if st.button("Login", key="header_login"):
+                if st.button("Login", key="header_login", type="primary"):
                     if login_admin(password):
                         st.success("✅ Logged in!")
                         st.rerun()
