@@ -1,7 +1,6 @@
 streamlit
 pillow
 pandas
-pytest  # For testing
-python-dotenv  # For loading environment variables from .env files
+pytest
+python-dotenv
 supabase>=2.0.0
-```
