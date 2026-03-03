@@ -101,13 +101,27 @@ class UploadService:
             try:
                 insert_result = self.client.table(self.table_name).insert(payload).execute()
             except Exception:
-                minimal_payload = {
-                    "filename": original_name,
-                    "cloud_storage_url": public_url,
-                    "upload_date": datetime.now(timezone.utc).isoformat(),
-                    "version": 1,
+                now_iso = datetime.now(timezone.utc).isoformat()
+                legacy_payload = {
+                    "image_path": public_url,
+                    "category": category,
+                    "location": location or "Unknown",
+                    "additional_details": details,
+                    "created_at": now_iso,
+                    "latitude": latitude,
+                    "longitude": longitude,
                 }
-                insert_result = self.client.table(self.table_name).insert(minimal_payload).execute()
+                legacy_payload = {key: value for key, value in legacy_payload.items() if value is not None}
+
+                try:
+                    insert_result = self.client.table(self.table_name).insert(legacy_payload).execute()
+                except Exception:
+                    minimal_payload = {
+                        "image_path": public_url,
+                        "category": category,
+                        "location": location or "Unknown",
+                    }
+                    insert_result = self.client.table(self.table_name).insert(minimal_payload).execute()
 
             return {
                 "success": True,
@@ -127,12 +141,33 @@ class UploadService:
 
     def list_uploaded_images(self):
         try:
-            result = (
-                self.client.table(self.table_name)
-                .select("*")
-                .order("upload_date", desc=True)
-                .execute()
-            )
-            return result.data or []
+            try:
+                result = (
+                    self.client.table(self.table_name)
+                    .select("*")
+                    .order("upload_date", desc=True)
+                    .execute()
+                )
+            except Exception:
+                try:
+                    result = (
+                        self.client.table(self.table_name)
+                        .select("*")
+                        .order("created_at", desc=True)
+                        .execute()
+                    )
+                except Exception:
+                    result = self.client.table(self.table_name).select("*").execute()
+
+            rows = result.data or []
+            normalized_rows = []
+            for row in rows:
+                normalized = dict(row)
+                normalized["filename"] = row.get("filename") or row.get("image_name") or "uploaded_image"
+                normalized["cloud_storage_url"] = row.get("cloud_storage_url") or row.get("image_path")
+                normalized["upload_date"] = row.get("upload_date") or row.get("created_at")
+                normalized_rows.append(normalized)
+
+            return normalized_rows
         except Exception:
             return []
