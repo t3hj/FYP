@@ -67,6 +67,24 @@ The app can run optional local Ollama vision analysis during upload.
 - Configure `OLLAMA_URL` and `OLLAMA_MODEL`.
 - If Ollama is unavailable, uploads still succeed and the app falls back to EXIF/manual data.
 
+## Strict AI + Geolocation Mode
+To make AI detection always active and enforce minimal manual form entry:
+- Set `REQUIRE_AI = "true"` to block uploads unless AI analysis succeeds.
+- Set `REQUIRE_GEOLOCATION = "true"` to block uploads unless coordinates are available.
+- Keep `ENABLE_GEOCODING = "true"` so location text can be geocoded when EXIF GPS is missing.
+
+Example Streamlit secrets:
+```
+ENABLE_OLLAMA = "true"
+OLLAMA_URL = "https://your-ollama-endpoint"
+OLLAMA_MODEL = "llava"
+REQUIRE_AI = "true"
+REQUIRE_GEOLOCATION = "true"
+ENABLE_GEOCODING = "true"
+```
+
+Note: `http://localhost:11434` only works on the machine running the app. For Streamlit Cloud, host Ollama on a reachable public endpoint.
+
 ## Usage
 - Navigate to the upload page to upload images.
 - View the gallery to see all uploaded images.

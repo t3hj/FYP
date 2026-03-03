@@ -1,4 +1,5 @@
 import streamlit as st
+from config.settings import ENABLE_OLLAMA, REQUIRE_AI, REQUIRE_GEOLOCATION
 from src.services.upload_service import UploadService
 from src.services.backup_service import BackupService
 
@@ -8,6 +9,14 @@ def main():
 
     st.title("📸 Local Lens")
     st.caption("Upload images, view shared reports, and export Supabase backups.")
+
+    if REQUIRE_AI:
+        if ENABLE_OLLAMA:
+            st.success("AI-required mode is ON. Every upload must be analyzed by Ollama.")
+        else:
+            st.error("AI-required mode is ON but Ollama is disabled. Uploads will be blocked until ENABLE_OLLAMA is true.")
+    if REQUIRE_GEOLOCATION:
+        st.info("Geolocation-required mode is ON. Uploads must include valid coordinates.")
 
     upload_service = UploadService()
     backup_service = BackupService()

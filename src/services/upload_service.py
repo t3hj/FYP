@@ -2,9 +2,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from config.settings import SUPABASE_BUCKET, SUPABASE_TABLE
+from config.settings import (
+    ENABLE_GEOCODING,
+    REQUIRE_AI,
+    REQUIRE_GEOLOCATION,
+    SUPABASE_BUCKET,
+    SUPABASE_TABLE,
+)
 from src.services.ai_service import analyze_issue_image
 from src.database.supabase_client import get_supabase_client
+from src.utils.geocoding import geocode_location
 from src.utils.geolocation import extract_gps_from_image_bytes
 from src.utils.validators import validate_image_format
 
@@ -33,12 +40,42 @@ class UploadService:
             inferred_latitude, inferred_longitude = extract_gps_from_image_bytes(file_bytes)
             ai_result = analyze_issue_image(file_bytes, original_name)
 
+            if REQUIRE_AI:
+                if not ai_result.get("enabled"):
+                    return {
+                        "success": False,
+                        "message": "AI analysis is required, but Ollama is disabled. Enable ENABLE_OLLAMA in secrets.",
+                    }
+                if ai_result.get("error"):
+                    return {
+                        "success": False,
+                        "message": f"AI analysis is required but failed: {ai_result.get('error')}",
+                    }
+                if not ai_result.get("category"):
+                    return {
+                        "success": False,
+                        "message": "AI analysis is required but no category was returned.",
+                    }
+
             latitude = inferred_latitude if inferred_latitude is not None else manual_latitude
             longitude = inferred_longitude if inferred_longitude is not None else manual_longitude
 
             category = ai_result.get("category") or "Other"
             details = ai_result.get("details")
             location = manual_location or ai_result.get("location_hint")
+
+            if (latitude is None or longitude is None) and ENABLE_GEOCODING and location:
+                geocoded_lat, geocoded_lon = geocode_location(location)
+                if latitude is None:
+                    latitude = geocoded_lat
+                if longitude is None:
+                    longitude = geocoded_lon
+
+            if REQUIRE_GEOLOCATION and (latitude is None or longitude is None):
+                return {
+                    "success": False,
+                    "message": "Geolocation is required but could not be extracted. Please provide a clearer location.",
+                }
 
             self.client.storage.from_(self.bucket_name).upload(
                 object_name,
