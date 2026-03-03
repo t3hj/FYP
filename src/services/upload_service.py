@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
 from config.settings import (
@@ -9,8 +10,8 @@ from config.settings import (
     SUPABASE_BUCKET,
     SUPABASE_TABLE,
 )
-from src.services.ai_service import analyze_issue_image
 from src.database.supabase_client import get_supabase_client
+from src.services.ai_service import analyze_issue_image
 from src.utils.geocoding import geocode_location
 from src.utils.geolocation import extract_gps_from_image_bytes
 from src.utils.validators import validate_image_format
@@ -22,6 +23,37 @@ class UploadService:
         self.table_name = SUPABASE_TABLE
         self.bucket_name = SUPABASE_BUCKET
 
+    def analyze_image(self, uploaded_file):
+        if uploaded_file is None:
+            return {"success": False, "message": "No file selected."}
+
+        if not validate_image_format(uploaded_file):
+            return {
+                "success": False,
+                "message": "Invalid image format. Please upload a valid image file.",
+            }
+
+        original_name = Path(uploaded_file.name).name
+        file_bytes = uploaded_file.getvalue()
+        content_type = uploaded_file.type or "application/octet-stream"
+
+        analysis = self._build_analysis(file_bytes=file_bytes, filename=original_name)
+        if REQUIRE_AI and analysis.get("ollama_error"):
+            return {
+                "success": False,
+                "message": f"AI analysis is required but failed: {analysis.get('ollama_error')}",
+                "analysis": analysis,
+            }
+
+        return {
+            "success": True,
+            "message": "Image analyzed successfully.",
+            "filename": original_name,
+            "content_type": content_type,
+            "analysis": analysis,
+            "file_bytes": file_bytes,
+        }
+
     def upload_image(self, uploaded_file, manual_location=None, manual_latitude=None, manual_longitude=None):
         if uploaded_file is None:
             return {"success": False, "message": "No file selected."}
@@ -32,37 +64,53 @@ class UploadService:
                 "message": "Invalid image format. Please upload a valid image file.",
             }
 
+        return self.upload_image_bytes(
+            file_bytes=uploaded_file.getvalue(),
+            original_name=Path(uploaded_file.name).name,
+            content_type=uploaded_file.type or "application/octet-stream",
+            manual_location=manual_location,
+            manual_latitude=manual_latitude,
+            manual_longitude=manual_longitude,
+            analysis_override=None,
+        )
+
+    def upload_image_bytes(
+        self,
+        file_bytes,
+        original_name,
+        content_type,
+        manual_location=None,
+        manual_latitude=None,
+        manual_longitude=None,
+        analysis_override=None,
+    ):
         try:
-            original_name = Path(uploaded_file.name).name
-            extension = Path(original_name).suffix.lower() or ".jpg"
-            object_name = f"uploads/{datetime.now(timezone.utc).strftime('%Y%m%d')}/{uuid4().hex}{extension}"
-            file_bytes = uploaded_file.getvalue()
-            inferred_latitude, inferred_longitude = extract_gps_from_image_bytes(file_bytes)
-            ai_result = analyze_issue_image(file_bytes, original_name)
+            analysis = dict(analysis_override) if isinstance(analysis_override, dict) else self._build_analysis(file_bytes, original_name)
+
+            category = analysis.get("category") or "Other"
+            details = analysis.get("details")
+            location_hint = analysis.get("location")
+            latitude = analysis.get("latitude")
+            longitude = analysis.get("longitude")
+            ollama_error = analysis.get("ollama_error")
+
+            location = manual_location or location_hint
+            latitude = manual_latitude if manual_latitude is not None else latitude
+            longitude = manual_longitude if manual_longitude is not None else longitude
 
             if REQUIRE_AI:
-                if not ai_result.get("enabled"):
+                if ollama_error:
                     return {
                         "success": False,
-                        "message": "AI analysis is required, but Ollama is disabled. Enable ENABLE_OLLAMA in secrets.",
+                        "message": f"AI analysis is required but failed: {ollama_error}",
+                        "analysis": analysis,
                     }
-                if ai_result.get("error"):
-                    return {
-                        "success": False,
-                        "message": f"AI analysis is required but failed: {ai_result.get('error')}",
-                    }
-                if not ai_result.get("category"):
+                if not category:
                     return {
                         "success": False,
                         "message": "AI analysis is required but no category was returned.",
+                        "analysis": analysis,
                     }
-
-            latitude = inferred_latitude if inferred_latitude is not None else manual_latitude
-            longitude = inferred_longitude if inferred_longitude is not None else manual_longitude
-
-            category = ai_result.get("category") or "Other"
-            details = ai_result.get("details")
-            location = manual_location or ai_result.get("location_hint")
 
             if (latitude is None or longitude is None) and ENABLE_GEOCODING and location:
                 geocoded_lat, geocoded_lon = geocode_location(location)
@@ -74,15 +122,21 @@ class UploadService:
             if REQUIRE_GEOLOCATION and (latitude is None or longitude is None):
                 return {
                     "success": False,
-                    "message": "Geolocation is required but could not be extracted. Please provide a clearer location.",
+                    "message": "Geolocation is required but could not be extracted. Enter a location before submitting.",
+                    "analysis": {
+                        **analysis,
+                        "location": location,
+                        "latitude": latitude,
+                        "longitude": longitude,
+                    },
                 }
 
+            object_name = f"uploads/{datetime.now(timezone.utc).strftime('%Y%m%d')}/{uuid4().hex}{Path(original_name).suffix.lower() or '.jpg'}"
             self.client.storage.from_(self.bucket_name).upload(
                 object_name,
                 file_bytes,
-                {"content-type": uploaded_file.type or "application/octet-stream"},
+                {"content-type": content_type or "application/octet-stream"},
             )
-
             public_url = self.client.storage.from_(self.bucket_name).get_public_url(object_name)
 
             payload = {
@@ -133,11 +187,39 @@ class UploadService:
                     "location": location,
                     "latitude": latitude,
                     "longitude": longitude,
-                    "ollama_error": ai_result.get("error"),
+                    "ollama_error": ollama_error,
                 },
             }
         except Exception as e:
             return {"success": False, "message": str(e)}
+
+    def _build_analysis(self, file_bytes, filename):
+        inferred_latitude, inferred_longitude = extract_gps_from_image_bytes(file_bytes)
+        ai_result = analyze_issue_image(file_bytes, filename)
+
+        category = ai_result.get("category") or "Other"
+        details = ai_result.get("details")
+        location = ai_result.get("location_hint")
+        latitude = inferred_latitude
+        longitude = inferred_longitude
+
+        if (latitude is None or longitude is None) and ENABLE_GEOCODING and location:
+            geocoded_lat, geocoded_lon = geocode_location(location)
+            if latitude is None:
+                latitude = geocoded_lat
+            if longitude is None:
+                longitude = geocoded_lon
+
+        return {
+            "category": category,
+            "details": details,
+            "location": location,
+            "latitude": latitude,
+            "longitude": longitude,
+            "ollama_error": ai_result.get("error"),
+            "ai_enabled": ai_result.get("enabled", False),
+            "ai_raw": ai_result.get("raw"),
+        }
 
     def list_uploaded_images(self):
         try:

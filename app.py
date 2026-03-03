@@ -22,6 +22,9 @@ def main():
     backup_service = BackupService()
     reports = upload_service.list_uploaded_images()
 
+    if "pending_upload" not in st.session_state:
+        st.session_state.pending_upload = None
+
     col_a, col_b = st.columns(2)
     with col_a:
         st.metric("Total Reports", len(reports))
@@ -32,57 +35,85 @@ def main():
     tab_upload, tab_reports, tab_map, tab_backup = st.tabs(["Upload", "Reports", "Map", "Backup"])
 
     with tab_upload:
-        st.subheader("Upload Image")
-        with st.form("upload_form", clear_on_submit=True):
-            uploaded_file = st.file_uploader(
-                "Choose an image...",
-                type=["jpg", "jpeg", "png"],
-                help="Supported formats: JPG, JPEG, PNG",
-            )
-            manual_location = st.text_input("Location (optional)")
-            manual_latitude_text = st.text_input("Latitude (optional)", placeholder="e.g. -37.8136")
-            manual_longitude_text = st.text_input("Longitude (optional)", placeholder="e.g. 144.9631")
-            submitted = st.form_submit_button("Upload")
+        st.subheader("Upload and Auto-Fill")
+        uploaded_file = st.file_uploader(
+            "Choose an image...",
+            type=["jpg", "jpeg", "png"],
+            help="Supported formats: JPG, JPEG, PNG",
+            key="upload_file",
+        )
 
-        if submitted:
+        if st.button("Analyze Image", use_container_width=True):
             if uploaded_file is None:
-                st.warning("Please choose an image before uploading.")
+                st.warning("Please choose an image first.")
             else:
+                analysis_result = upload_service.analyze_image(uploaded_file)
+                if not analysis_result.get("success"):
+                    st.error(analysis_result.get("message", "Image analysis failed."))
+                else:
+                    st.session_state.pending_upload = analysis_result
+                    st.success("AI analysis complete. Review details and submit.")
+
+        pending = st.session_state.pending_upload
+        if pending:
+            analysis = pending.get("analysis", {})
+            st.caption("AI prefilled these details. You can edit before submitting.")
+            with st.form("submit_report_form"):
+                category = st.text_input("Category", value=str(analysis.get("category") or "Other"))
+                details = st.text_area("Details", value=str(analysis.get("details") or ""))
+                location = st.text_input("Location", value=str(analysis.get("location") or ""))
+                latitude_text = st.text_input(
+                    "Latitude",
+                    value="" if analysis.get("latitude") is None else str(analysis.get("latitude")),
+                )
+                longitude_text = st.text_input(
+                    "Longitude",
+                    value="" if analysis.get("longitude") is None else str(analysis.get("longitude")),
+                )
+
+                submit_report = st.form_submit_button("Submit Report")
+
+            if submit_report:
                 try:
-                    manual_latitude = float(manual_latitude_text) if manual_latitude_text.strip() else None
-                    manual_longitude = float(manual_longitude_text) if manual_longitude_text.strip() else None
+                    latitude = float(latitude_text) if latitude_text.strip() else None
+                    longitude = float(longitude_text) if longitude_text.strip() else None
                 except ValueError:
                     st.error("Latitude and longitude must be valid numbers.")
                     return
 
-                result = upload_service.upload_image(
-                    uploaded_file,
-                    manual_location=manual_location or None,
-                    manual_latitude=manual_latitude,
-                    manual_longitude=manual_longitude,
+                if (latitude is None or longitude is None) and not location.strip():
+                    st.warning("Could not extract geolocation. Please enter a location before submitting.")
+                    return
+
+                final_analysis = {
+                    **analysis,
+                    "category": category,
+                    "details": details,
+                    "location": location,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                }
+
+                upload_result = upload_service.upload_image_bytes(
+                    file_bytes=pending.get("file_bytes"),
+                    original_name=pending.get("filename"),
+                    content_type=pending.get("content_type"),
+                    manual_location=location or None,
+                    manual_latitude=latitude,
+                    manual_longitude=longitude,
+                    analysis_override=final_analysis,
                 )
-                if result["success"]:
-                    st.success("Image uploaded successfully!")
-                    analysis = result.get("analysis", {})
-                    if analysis:
-                        st.caption("Detected metadata")
-                        st.write(
-                            {
-                                "category": analysis.get("category"),
-                                "details": analysis.get("details"),
-                                "location": analysis.get("location"),
-                                "latitude": analysis.get("latitude"),
-                                "longitude": analysis.get("longitude"),
-                            }
-                        )
-                        if analysis.get("ollama_error"):
-                            st.info(
-                                "Ollama analysis unavailable for this upload. "
-                                f"Reason: {analysis.get('ollama_error')}"
-                            )
+
+                if upload_result.get("success"):
+                    st.success("Report submitted successfully!")
+                    st.session_state.pending_upload = None
                     st.rerun()
                 else:
-                    st.error(f"Error uploading image: {result['message']}")
+                    st.error(upload_result.get("message", "Upload failed."))
+
+            if st.button("Clear Analysis", use_container_width=True):
+                st.session_state.pending_upload = None
+                st.rerun()
 
     with tab_reports:
         st.subheader("Stored Reports")
