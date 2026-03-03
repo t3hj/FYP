@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  web:
+    build: ./docker
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./tests:/app/tests
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - CLOUD_STORAGE_URL=${CLOUD_STORAGE_URL}
+      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE}
+    depends_on:
+      - db
+      - storage
+
+  db:
+    image: sqlite:latest
+    volumes:
+      - ./image_data.db:/data/image_data.db
+
+  storage:
+    image: your-cloud-storage-image
+    environment:
+      - STORAGE_API_KEY=${STORAGE_API_KEY}
+      - STORAGE_BUCKET=${STORAGE_BUCKET}
+    volumes:
+      - ./cloud_storage:/app/cloud_storage
+
+networks:
+  default:
+    driver: bridge
+
+volumes:
+  uploads:
+  cloud_storage:

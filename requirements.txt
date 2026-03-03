@@ -1,0 +1,7 @@
+streamlit
+pillow
+pandas
+pytest  # For testing
+python-dotenv  # For loading environment variables from .env files
+supabase>=2.0.0
+```
