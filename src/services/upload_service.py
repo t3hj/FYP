@@ -3,7 +3,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from config.settings import SUPABASE_BUCKET, SUPABASE_TABLE
+from src.services.ai_service import analyze_issue_image
 from src.database.supabase_client import get_supabase_client
+from src.utils.geolocation import extract_gps_from_image_bytes
 from src.utils.validators import validate_image_format
 
 
@@ -13,7 +15,7 @@ class UploadService:
         self.table_name = SUPABASE_TABLE
         self.bucket_name = SUPABASE_BUCKET
 
-    def upload_image(self, uploaded_file):
+    def upload_image(self, uploaded_file, manual_location=None, manual_latitude=None, manual_longitude=None):
         if uploaded_file is None:
             return {"success": False, "message": "No file selected."}
 
@@ -28,6 +30,15 @@ class UploadService:
             extension = Path(original_name).suffix.lower() or ".jpg"
             object_name = f"uploads/{datetime.now(timezone.utc).strftime('%Y%m%d')}/{uuid4().hex}{extension}"
             file_bytes = uploaded_file.getvalue()
+            inferred_latitude, inferred_longitude = extract_gps_from_image_bytes(file_bytes)
+            ai_result = analyze_issue_image(file_bytes, original_name)
+
+            latitude = inferred_latitude if inferred_latitude is not None else manual_latitude
+            longitude = inferred_longitude if inferred_longitude is not None else manual_longitude
+
+            category = ai_result.get("category") or "Other"
+            details = ai_result.get("details")
+            location = manual_location or ai_result.get("location_hint")
 
             self.client.storage.from_(self.bucket_name).upload(
                 object_name,
@@ -42,14 +53,37 @@ class UploadService:
                 "cloud_storage_url": public_url,
                 "upload_date": datetime.now(timezone.utc).isoformat(),
                 "version": 1,
+                "category": category,
+                "additional_details": details,
+                "location": location,
+                "latitude": latitude,
+                "longitude": longitude,
             }
+            payload = {key: value for key, value in payload.items() if value is not None}
 
-            insert_result = self.client.table(self.table_name).insert(payload).execute()
+            try:
+                insert_result = self.client.table(self.table_name).insert(payload).execute()
+            except Exception:
+                minimal_payload = {
+                    "filename": original_name,
+                    "cloud_storage_url": public_url,
+                    "upload_date": datetime.now(timezone.utc).isoformat(),
+                    "version": 1,
+                }
+                insert_result = self.client.table(self.table_name).insert(minimal_payload).execute()
 
             return {
                 "success": True,
                 "message": "Image uploaded successfully.",
                 "data": insert_result.data[0] if insert_result.data else payload,
+                "analysis": {
+                    "category": category,
+                    "details": details,
+                    "location": location,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "ollama_error": ai_result.get("error"),
+                },
             }
         except Exception as e:
             return {"success": False, "message": str(e)}

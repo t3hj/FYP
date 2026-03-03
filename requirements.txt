@@ -3,4 +3,5 @@ pillow
 pandas
 pytest
 python-dotenv
+requests
 supabase>=2.0.0

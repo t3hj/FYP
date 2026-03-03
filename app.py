@@ -30,15 +30,47 @@ def main():
                 type=["jpg", "jpeg", "png"],
                 help="Supported formats: JPG, JPEG, PNG",
             )
+            manual_location = st.text_input("Location (optional)")
+            manual_latitude_text = st.text_input("Latitude (optional)", placeholder="e.g. -37.8136")
+            manual_longitude_text = st.text_input("Longitude (optional)", placeholder="e.g. 144.9631")
             submitted = st.form_submit_button("Upload")
 
         if submitted:
             if uploaded_file is None:
                 st.warning("Please choose an image before uploading.")
             else:
-                result = upload_service.upload_image(uploaded_file)
+                try:
+                    manual_latitude = float(manual_latitude_text) if manual_latitude_text.strip() else None
+                    manual_longitude = float(manual_longitude_text) if manual_longitude_text.strip() else None
+                except ValueError:
+                    st.error("Latitude and longitude must be valid numbers.")
+                    return
+
+                result = upload_service.upload_image(
+                    uploaded_file,
+                    manual_location=manual_location or None,
+                    manual_latitude=manual_latitude,
+                    manual_longitude=manual_longitude,
+                )
                 if result["success"]:
                     st.success("Image uploaded successfully!")
+                    analysis = result.get("analysis", {})
+                    if analysis:
+                        st.caption("Detected metadata")
+                        st.write(
+                            {
+                                "category": analysis.get("category"),
+                                "details": analysis.get("details"),
+                                "location": analysis.get("location"),
+                                "latitude": analysis.get("latitude"),
+                                "longitude": analysis.get("longitude"),
+                            }
+                        )
+                        if analysis.get("ollama_error"):
+                            st.info(
+                                "Ollama analysis unavailable for this upload. "
+                                f"Reason: {analysis.get('ollama_error')}"
+                            )
                     st.rerun()
                 else:
                     st.error(f"Error uploading image: {result['message']}")

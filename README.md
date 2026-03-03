@@ -46,6 +46,27 @@ This project is a Streamlit web application designed for image upload and data m
    streamlit run app.py
    ```
 
+## Supabase Requirements
+Create a `reports` table that supports uploaded image metadata. At minimum, ensure these columns exist:
+- `id` (primary key)
+- `filename` (text)
+- `cloud_storage_url` (text)
+- `upload_date` (timestamp/text)
+- `version` (integer)
+
+To support map view and AI-enriched fields, also add:
+- `category` (text)
+- `additional_details` (text)
+- `location` (text)
+- `latitude` (double precision)
+- `longitude` (double precision)
+
+## Ollama (Optional)
+The app can run optional local Ollama vision analysis during upload.
+- Set `ENABLE_OLLAMA = "true"` in Streamlit secrets to enable.
+- Configure `OLLAMA_URL` and `OLLAMA_MODEL`.
+- If Ollama is unavailable, uploads still succeed and the app falls back to EXIF/manual data.
+
 ## Usage
 - Navigate to the upload page to upload images.
 - View the gallery to see all uploaded images.
