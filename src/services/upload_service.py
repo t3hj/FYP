@@ -88,7 +88,10 @@ class UploadService:
             analysis = dict(analysis_override) if isinstance(analysis_override, dict) else self._build_analysis(file_bytes, original_name)
 
             category = analysis.get("category") or "Other"
+            title = analysis.get("title")
+            severity = analysis.get("severity") or "Medium"
             details = analysis.get("details")
+            recommended_action = analysis.get("recommended_action")
             location_hint = analysis.get("location")
             latitude = analysis.get("latitude")
             longitude = analysis.get("longitude")
@@ -145,7 +148,10 @@ class UploadService:
                 "upload_date": datetime.now(timezone.utc).isoformat(),
                 "version": 1,
                 "category": category,
+                "title": title,
+                "severity": severity,
                 "additional_details": details,
+                "recommended_action": recommended_action,
                 "location": location,
                 "latitude": latitude,
                 "longitude": longitude,
@@ -159,8 +165,11 @@ class UploadService:
                 legacy_payload = {
                     "image_path": public_url,
                     "category": category,
+                    "title": title,
+                    "severity": severity,
                     "location": location or "Unknown",
                     "additional_details": details,
+                    "recommended_action": recommended_action,
                     "created_at": now_iso,
                     "latitude": latitude,
                     "longitude": longitude,
@@ -182,8 +191,11 @@ class UploadService:
                 "message": "Image uploaded successfully.",
                 "data": insert_result.data[0] if insert_result.data else payload,
                 "analysis": {
+                    "title": title,
                     "category": category,
+                    "severity": severity,
                     "details": details,
+                    "recommended_action": recommended_action,
                     "location": location,
                     "latitude": latitude,
                     "longitude": longitude,
@@ -198,7 +210,11 @@ class UploadService:
         ai_result = analyze_issue_image(file_bytes, filename)
 
         category = ai_result.get("category") or "Other"
-        details = ai_result.get("details")
+        # Support both old "details" key and new "description" key from AI service
+        description = ai_result.get("description") or ai_result.get("details")
+        title = ai_result.get("title")
+        severity = ai_result.get("severity") or "Medium"
+        recommended_action = ai_result.get("recommended_action")
         location = ai_result.get("location_hint")
         latitude = inferred_latitude
         longitude = inferred_longitude
@@ -211,8 +227,11 @@ class UploadService:
                 longitude = geocoded_lon
 
         return {
+            "title": title,
             "category": category,
-            "details": details,
+            "severity": severity,
+            "details": description,
+            "recommended_action": recommended_action,
             "location": location,
             "latitude": latitude,
             "longitude": longitude,
