@@ -47,18 +47,19 @@ def analyze_issue_image(file_bytes, filename):
 
         categories_str = ", ".join(VALID_CATEGORIES)
         prompt = (
-            "You are an AI assistant helping citizens report local issues to their council, "
-            "similar to FixMyStreet. Analyze this image carefully and respond with ONLY a "
-            "valid JSON object — no extra text before or after the JSON.\n\n"
-            "Return the following keys:\n"
-            f"- category: one of [{categories_str}]\n"
-            "- severity: one of [Low, Medium, High, Critical] based on safety risk and urgency\n"
-            "- title: a short one-line summary (max 10 words) suitable as a report headline\n"
-            "- description: 2-3 factual sentences describing exactly what is wrong and why it matters\n"
-            "- location_hint: any visible street names, road signs, landmarks, or house numbers — null if none visible\n"
-            "- recommended_action: brief council action needed (e.g. 'Fill pothole and repave affected section')\n\n"
-            "Severity guide: Low=minor eyesore, Medium=accessibility issue, High=safety hazard, Critical=immediate danger.\n"
-            "Respond with only the JSON object."
+            "Analyze this image of a community issue. "
+            "Reply with ONLY a JSON object, no other text. "
+            "Use these exact keys:\n"
+            f"category (one of: {categories_str}), "
+            "severity (one of: Low, Medium, High, Critical), "
+            "title (short headline under 10 words), "
+            "description (1-2 sentences about what is wrong), "
+            "location_hint (any visible street name or landmark, or null), "
+            "recommended_action (what the council should do).\n"
+            "Example: {\"category\":\"Pothole\",\"severity\":\"High\","
+            "\"title\":\"Large pothole on main road\","
+            "\"description\":\"Deep pothole causing vehicle damage.\","
+            "\"location_hint\":null,\"recommended_action\":\"Fill and repave pothole.\"}"
         )
 
         response = requests.post(

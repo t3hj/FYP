@@ -1,6 +1,7 @@
-﻿import streamlit as st
+import streamlit as st
+import pandas as pd
 
-from config.settings import ENABLE_OLLAMA, REQUIRE_AI, REQUIRE_GEOLOCATION
+from config.settings import ENABLE_OLLAMA, REQUIRE_AI, REQUIRE_GEOLOCATION, COUNCIL_ADMIN_PASSWORD
 from src.services.ai_service import VALID_CATEGORIES, VALID_SEVERITIES
 from src.services.backup_service import BackupService
 from src.services.upload_service import UploadService
@@ -23,13 +24,13 @@ def severity_badge(severity: str) -> str:
 
 
 def main():
-    st.set_page_config(page_title="Local Lens", page_icon="", layout="wide")
+    st.set_page_config(page_title="Local Lens", page_icon="📸", layout="wide")
 
     st.markdown(
         """
-        <h1 style='margin-bottom:0'> Local Lens</h1>
+        <h1 style='margin-bottom:0'>📸 Local Lens</h1>
         <p style='color:#666;margin-top:4px'>
-        Upload a photo of a community issue  AI fills the report for you.
+        Upload a photo of a community issue — AI fills the report for you.
         </p>
         """,
         unsafe_allow_html=True,
@@ -37,22 +38,22 @@ def main():
 
     if REQUIRE_AI:
         if ENABLE_OLLAMA:
-            st.success(" AI mode active  every report is automatically analysed by Ollama.")
+            st.success("✅ AI mode active — every report is automatically analysed by Ollama.")
         else:
             st.error(
-                " AI-required mode is ON but Ollama is disabled. "
+                "⚠️ AI-required mode is ON but Ollama is disabled. "
                 "Set ENABLE_OLLAMA = true in your secrets."
             )
     if REQUIRE_GEOLOCATION:
-        st.info(" Geolocation required  reports must include valid coordinates.")
+        st.info("📍 Geolocation required — reports must include valid coordinates.")
 
     upload_service = UploadService()
     backup_service = BackupService()
     reports = upload_service.list_uploaded_images()
 
-    for key in ("pending_upload", "analyzed_file_id"):
+    for key in ("pending_upload", "analyzed_file_id", "council_authed"):
         if key not in st.session_state:
-            st.session_state[key] = None
+            st.session_state[key] = None if key != "council_authed" else False
 
     col_a, col_b, col_c = st.columns(3)
     with col_a:
@@ -72,13 +73,11 @@ def main():
 
     st.divider()
 
-    tab_upload, tab_reports, tab_map, tab_backup = st.tabs(
-        [" Report an Issue", " View Reports", " Map", " Backup"]
+    tab_upload, tab_reports, tab_map, tab_insights, tab_backup = st.tabs(
+        ["📤 Report an Issue", "📋 View Reports", "🗺️ Map", "🏛 Council Insights", "💾 Backup"]
     )
 
-    # 
-    # TAB 1  Report an Issue
-    # 
+    # ── TAB 1: Report an Issue ────────────────────────────────────────────────
     with tab_upload:
         st.subheader("Report a Community Issue")
         st.markdown(
@@ -87,22 +86,21 @@ def main():
         )
 
         uploaded_file = st.file_uploader(
-            " Upload your photo",
+            "📷 Upload your photo",
             type=["jpg", "jpeg", "png"],
             help="Supported formats: JPG, JPEG, PNG",
             key="upload_file",
         )
 
-        # Auto-analyse when a new file is detected
         if uploaded_file is not None:
             file_id = f"{uploaded_file.name}_{uploaded_file.size}"
             if st.session_state.analyzed_file_id != file_id:
-                with st.spinner(" AI is analysing your image  this takes a few seconds"):
+                with st.spinner("🤖 AI is analysing your image — this takes a few seconds…"):
                     result = upload_service.analyze_image(uploaded_file)
                 st.session_state.analyzed_file_id = file_id
                 if result.get("success"):
                     st.session_state.pending_upload = result
-                    st.toast(" Analysis complete! Review the pre-filled report below.", icon="")
+                    st.toast("✅ Analysis complete! Review the pre-filled report below.", icon="🤖")
                 else:
                     st.session_state.pending_upload = None
                     st.error(result.get("message", "AI analysis failed."))
@@ -116,7 +114,7 @@ def main():
                     "automatic AI form-filling."
                 )
             else:
-                st.info(" Upload an image above and AI will instantly fill the report for you.")
+                st.info("⬆️ Upload an image above and AI will instantly fill the report for you.")
         else:
             analysis = pending.get("analysis", {})
             file_bytes = pending.get("file_bytes", b"")
@@ -125,7 +123,7 @@ def main():
             col_img, col_form = st.columns([1, 2], gap="large")
 
             with col_img:
-                st.markdown("** Your Photo**")
+                st.markdown("**📷 Your Photo**")
                 st.image(file_bytes, use_container_width=True)
                 sev = analysis.get("severity") or "Medium"
                 st.markdown(
@@ -134,13 +132,13 @@ def main():
                 )
                 st.caption(f"File: {filename}")
                 if analysis.get("ai_raw"):
-                    with st.expander(" Raw AI output"):
+                    with st.expander("🔍 Raw AI output"):
                         st.code(analysis["ai_raw"], language="json")
                 if analysis.get("ollama_error"):
                     st.warning(f"AI error: {analysis['ollama_error']}")
 
             with col_form:
-                st.markdown("** Report Details  AI has pre-filled these for you**")
+                st.markdown("**📝 Report Details — AI has pre-filled these for you**")
                 st.caption("All fields are editable. Correct anything the AI got wrong, then submit.")
 
                 with st.form("submit_report_form"):
@@ -158,11 +156,7 @@ def main():
                             if ai_category in VALID_CATEGORIES
                             else len(VALID_CATEGORIES) - 1
                         )
-                        category = st.selectbox(
-                            "Category",
-                            options=VALID_CATEGORIES,
-                            index=cat_index,
-                        )
+                        category = st.selectbox("Category", options=VALID_CATEGORIES, index=cat_index)
                     with col_sev:
                         ai_severity = str(analysis.get("severity") or "Medium")
                         sev_index = (
@@ -181,16 +175,14 @@ def main():
                         "Description",
                         value=str(analysis.get("details") or ""),
                         height=120,
-                        placeholder="Describe the issue in detail",
+                        placeholder="Describe the issue in detail…",
                     )
-
                     recommended_action = st.text_area(
                         "Recommended Action",
                         value=str(analysis.get("recommended_action") or ""),
                         height=80,
                         placeholder="What should the council do?",
                     )
-
                     location = st.text_input(
                         "Location",
                         value=str(analysis.get("location") or ""),
@@ -217,10 +209,10 @@ def main():
                     col_submit, col_clear = st.columns([3, 1])
                     with col_submit:
                         submit_report = st.form_submit_button(
-                            " Submit Report", use_container_width=True, type="primary"
+                            "✅ Submit Report", use_container_width=True, type="primary"
                         )
                     with col_clear:
-                        clear_btn = st.form_submit_button(" Clear", use_container_width=True)
+                        clear_btn = st.form_submit_button("🗑️ Clear", use_container_width=True)
 
                 if clear_btn:
                     st.session_state.pending_upload = None
@@ -237,7 +229,7 @@ def main():
 
                     if (latitude is None or longitude is None) and not location.strip():
                         st.warning(
-                            " No location found. Please enter at least a street name or postcode."
+                            "📍 No location found. Please enter at least a street name or postcode."
                         )
                         return
 
@@ -257,7 +249,7 @@ def main():
                         "longitude": longitude,
                     }
 
-                    with st.spinner("Submitting report"):
+                    with st.spinner("Submitting report…"):
                         upload_result = upload_service.upload_image_bytes(
                             file_bytes=pending.get("file_bytes"),
                             original_name=pending.get("filename"),
@@ -269,25 +261,22 @@ def main():
                         )
 
                     if upload_result.get("success"):
-                        st.success(" Report submitted! Thank you for helping improve your community.")
+                        st.success("🎉 Report submitted! Thank you for helping improve your community.")
                         st.session_state.pending_upload = None
                         st.session_state.analyzed_file_id = None
                         st.rerun()
                     else:
                         st.error(upload_result.get("message", "Upload failed."))
 
-    # 
-    # TAB 2  View Reports
-    # 
+    # ── TAB 2: View Reports ────────────────────────────────────────────────────
     with tab_reports:
         st.subheader("Community Reports")
-
         if not reports:
             st.info("No reports submitted yet. Be the first!")
         else:
             filter_col1, filter_col2, filter_col3 = st.columns(3)
             with filter_col1:
-                search_term = st.text_input(" Search by filename or location", "")
+                search_term = st.text_input("🔍 Search by filename or location", "")
             with filter_col2:
                 all_categories = ["All"] + sorted(
                     {r.get("category", "Unknown") for r in reports if r.get("category")}
@@ -327,18 +316,16 @@ def main():
                     header_col, meta_col = st.columns([3, 1])
                     with header_col:
                         st.markdown(f"**{title_text}**&nbsp;&nbsp;{badge}", unsafe_allow_html=True)
-                        st.caption(f" {cat} &nbsp;|&nbsp;  {loc} &nbsp;|&nbsp;  {date}")
+                        st.caption(f"🏷️ {cat}  |  📍 {loc}  |  📅 {date}")
                     with meta_col:
                         if image_url:
                             st.image(image_url, width=120)
                     if details_text:
                         st.markdown(f"*{details_text}*")
                     if action_text:
-                        st.markdown(f"** Recommended action:** {action_text}")
+                        st.markdown(f"**💡 Recommended action:** {action_text}")
 
-    # 
-    # TAB 3  Map
-    # 
+    # ── TAB 3: Map ─────────────────────────────────────────────────────────────
     with tab_map:
         st.subheader("Report Locations")
         if reports:
@@ -359,13 +346,79 @@ def main():
                 st.info("No coordinates found yet. Geo-tagged reports will appear here automatically.")
         else:
             st.info("No reports yet.")
+    # ── TAB 4: Council Insights ────────────────────────────────────────────────
+    with tab_insights:
+        st.subheader("Council Insights")
 
-    # 
-    # TAB 4  Backup
-    # 
+        if not COUNCIL_ADMIN_PASSWORD:
+            st.warning(
+                "Council analytics password is not configured. "
+                "Set `COUNCIL_ADMIN_PASSWORD` in `.streamlit/secrets.toml` to protect this view."
+            )
+
+        if not st.session_state.get("council_authed", False) and COUNCIL_ADMIN_PASSWORD:
+            st.info("This area is reserved for council staff.")
+            password = st.text_input("Council admin password", type="password", key="council_password")
+            if st.button("Log in", key="council_login_button"):
+                if password == COUNCIL_ADMIN_PASSWORD:
+                    st.session_state["council_authed"] = True
+                    st.success("Logged in as council.")
+                else:
+                    st.error("Incorrect password.")
+
+        if st.session_state.get("council_authed", False) or not COUNCIL_ADMIN_PASSWORD:
+            if not reports:
+                st.info("No reports yet. Council analytics will appear here once residents submit reports.")
+            else:
+                df = pd.DataFrame(reports)
+
+                # Normalise dates for charting
+                if "upload_date" in df.columns:
+                    df["upload_date"] = pd.to_datetime(df["upload_date"], errors="coerce")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Reports by Category**")
+                    cat_counts = (
+                        df["category"]
+                        .fillna("Unknown")
+                        .value_counts()
+                        .rename_axis("Category")
+                        .reset_index(name="Reports")
+                    )
+                    st.bar_chart(cat_counts.set_index("Category"))
+
+                with col2:
+                    st.markdown("**Reports by Severity**")
+                    if "severity" in df.columns:
+                        sev_counts = (
+                            df["severity"]
+                            .fillna("Medium")
+                            .value_counts()
+                            .rename_axis("Severity")
+                            .reset_index(name="Reports")
+                        )
+                        st.bar_chart(sev_counts.set_index("Severity"))
+
+                st.markdown("---")
+                st.markdown("**Reports Over Time**")
+                if "upload_date" in df.columns and df["upload_date"].notna().any():
+                    time_series = (
+                        df.dropna(subset=["upload_date"])
+                        .groupby(df["upload_date"].dt.date)
+                        .size()
+                        .rename("Reports")
+                        .reset_index()
+                        .rename(columns={"upload_date": "Date"})
+                    )
+                    st.line_chart(time_series.set_index("Date"))
+                else:
+                    st.caption("Report dates are not available yet for time-based analytics.")
+
+    # ── TAB 5: Backup ──────────────────────────────────────────────────────────
     with tab_backup:
         st.subheader("Backup Management")
-        if st.button(" Run Backup"):
+        if st.button("▶️ Run Backup"):
             backup_result = backup_service.run_backup()
             if backup_result["success"]:
                 st.success(backup_result.get("message", "Backup completed."))

@@ -14,5 +14,12 @@ REQUIRE_AI = str(st.secrets.get("REQUIRE_AI", os.getenv("REQUIRE_AI", "false")))
 REQUIRE_GEOLOCATION = str(st.secrets.get("REQUIRE_GEOLOCATION", os.getenv("REQUIRE_GEOLOCATION", "false"))).lower() == "true"
 ENABLE_GEOCODING = str(st.secrets.get("ENABLE_GEOCODING", os.getenv("ENABLE_GEOCODING", "true"))).lower() == "true"
 
+# Optional password protecting council-only views such as analytics.
+# Set COUNCIL_ADMIN_PASSWORD in `.streamlit/secrets.toml` or environment variables.
+COUNCIL_ADMIN_PASSWORD = st.secrets.get(
+    "COUNCIL_ADMIN_PASSWORD",
+    os.getenv("COUNCIL_ADMIN_PASSWORD", ""),
+)
+
 BACKUP_DIRECTORY = "backups/"  # Directory for storing metadata exports
 LOGGING_LEVEL = "INFO"
