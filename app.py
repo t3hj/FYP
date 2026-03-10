@@ -139,7 +139,10 @@ def main():
 
             with col_form:
                 st.markdown("**📝 Report Details — AI has pre-filled these for you**")
-                st.caption("All fields are editable. Correct anything the AI got wrong, then submit.")
+                st.caption(
+                    "All fields are editable. Correct anything the AI got wrong, then submit. "
+                    "To avoid duplicates, we limit how often the same issue can be re-reported."
+                )
 
                 with st.form("submit_report_form"):
                     title = st.text_input(
@@ -205,6 +208,13 @@ def main():
                             placeholder="e.g. -0.1278",
                         )
 
+                    reporter_email = st.text_input(
+                        "Your email (optional)",
+                        value="",
+                        placeholder="Used only to avoid repeated reports of the same issue.",
+                        help="We use this to prevent duplicate reports of the same issue from the same person within a short time window.",
+                    )
+
                     st.markdown("---")
                     col_submit, col_clear = st.columns([3, 1])
                     with col_submit:
@@ -237,6 +247,8 @@ def main():
                         st.warning("Please provide a report title.")
                         return
 
+                    reporter_id = reporter_email.strip() or None
+
                     final_analysis = {
                         **analysis,
                         "title": title,
@@ -257,6 +269,7 @@ def main():
                             manual_location=location or None,
                             manual_latitude=latitude,
                             manual_longitude=longitude,
+                            reporter_id=reporter_id,
                             analysis_override=final_analysis,
                         )
 
@@ -418,19 +431,22 @@ def main():
     # ── TAB 5: Backup ──────────────────────────────────────────────────────────
     with tab_backup:
         st.subheader("Backup Management")
-        if st.button("▶️ Run Backup"):
-            backup_result = backup_service.run_backup()
-            if backup_result["success"]:
-                st.success(backup_result.get("message", "Backup completed."))
-                st.caption(backup_result.get("backup_file", ""))
-            else:
-                st.error(f"Backup failed: {backup_result['message']}")
-        backups = backup_service.list_backups()
-        if backups:
-            st.write("Recent backup files:")
-            st.write(backups)
+        if COUNCIL_ADMIN_PASSWORD and not st.session_state.get("council_authed", False):
+            st.info("Backups are restricted to council staff. Log in on the Council Insights tab to access this area.")
         else:
-            st.info("No backups yet.")
+            if st.button("▶️ Run Backup"):
+                backup_result = backup_service.run_backup()
+                if backup_result["success"]:
+                    st.success(backup_result.get("message", "Backup completed."))
+                    st.caption(backup_result.get("backup_file", ""))
+                else:
+                    st.error(f"Backup failed: {backup_result['message']}")
+            backups = backup_service.list_backups()
+            if backups:
+                st.write("Recent backup files:")
+                st.write(backups)
+            else:
+                st.info("No backups yet.")
 
 
 if __name__ == "__main__":

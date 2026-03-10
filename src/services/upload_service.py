@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 from uuid import uuid4
+
+import hashlib
 
 from config.settings import (
     ENABLE_GEOCODING,
@@ -54,7 +55,14 @@ class UploadService:
             "file_bytes": file_bytes,
         }
 
-    def upload_image(self, uploaded_file, manual_location=None, manual_latitude=None, manual_longitude=None):
+    def upload_image(
+        self,
+        uploaded_file,
+        manual_location=None,
+        manual_latitude=None,
+        manual_longitude=None,
+        reporter_id=None,
+    ):
         if uploaded_file is None:
             return {"success": False, "message": "No file selected."}
 
@@ -71,6 +79,7 @@ class UploadService:
             manual_location=manual_location,
             manual_latitude=manual_latitude,
             manual_longitude=manual_longitude,
+            reporter_id=reporter_id,
             analysis_override=None,
         )
 
@@ -82,6 +91,7 @@ class UploadService:
         manual_location=None,
         manual_latitude=None,
         manual_longitude=None,
+        reporter_id=None,
         analysis_override=None,
     ):
         try:
@@ -134,6 +144,71 @@ class UploadService:
                     },
                 }
 
+            # Compute a stable hash of the image bytes to prevent exact duplicate uploads.
+            image_hash = hashlib.sha256(file_bytes).hexdigest()
+
+            # Check for an existing report with the same image hash.
+            try:
+                existing_hash = (
+                    self.client.table(self.table_name)
+                    .select("id, upload_date, created_at")
+                    .eq("image_hash", image_hash)
+                    .limit(1)
+                    .execute()
+                )
+            except Exception:
+                existing_hash = None
+
+            if existing_hash and existing_hash.data:
+                return {
+                    "success": False,
+                    "message": "This photo has already been reported. Thank you for flagging it.",
+                }
+
+            # Enforce a cooldown: prevent the same reporter from reporting the same issue
+            # (same category and location) within the last 4 days.
+            if reporter_id and (category and location):
+                now = datetime.now(timezone.utc)
+                four_days_ago = now - timedelta(days=4)
+
+                try:
+                    recent_reports = (
+                        self.client.table(self.table_name)
+                        .select("id, category, location, upload_date, created_at")
+                        .eq("reporter_id", reporter_id)
+                        .eq("category", category)
+                        .eq("location", location)
+                        .order("upload_date", desc=True)
+                        .limit(10)
+                        .execute()
+                    )
+                except Exception:
+                    recent_reports = None
+
+                if recent_reports and recent_reports.data:
+                    for row in recent_reports.data:
+                        ts_raw = row.get("upload_date") or row.get("created_at")
+                        if not ts_raw:
+                            continue
+                        try:
+                            # Handle both plain ISO strings and ones ending with 'Z'
+                            ts_str = str(ts_raw).replace("Z", "+00:00")
+                            ts = datetime.fromisoformat(ts_str)
+                        except Exception:
+                            continue
+                        # Assume timestamps without tz are UTC
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        if ts >= four_days_ago:
+                            return {
+                                "success": False,
+                                "message": (
+                                    "You have already reported this type of issue at this location "
+                                    "within the last 4 days. Please give the council time to respond "
+                                    "before submitting another report for the same problem."
+                                ),
+                            }
+
             object_name = f"uploads/{datetime.now(timezone.utc).strftime('%Y%m%d')}/{uuid4().hex}{Path(original_name).suffix.lower() or '.jpg'}"
             self.client.storage.from_(self.bucket_name).upload(
                 object_name,
@@ -155,6 +230,8 @@ class UploadService:
                 "location": location,
                 "latitude": latitude,
                 "longitude": longitude,
+                "reporter_id": reporter_id,
+                "image_hash": image_hash,
             }
             payload = {key: value for key, value in payload.items() if value is not None}
 
@@ -173,6 +250,8 @@ class UploadService:
                     "created_at": now_iso,
                     "latitude": latitude,
                     "longitude": longitude,
+                    "reporter_id": reporter_id,
+                    "image_hash": image_hash,
                 }
                 legacy_payload = {key: value for key, value in legacy_payload.items() if value is not None}
 
