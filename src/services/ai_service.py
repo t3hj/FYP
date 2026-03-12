@@ -75,7 +75,7 @@ def analyze_issue_image(file_bytes, filename):
                 ],
                 "stream": False,
             },
-            timeout=90,
+            timeout=300,
         )
         response.raise_for_status()
 
