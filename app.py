@@ -66,11 +66,25 @@ def set_theme(theme: str) -> None:
 def apply_theme_css(theme: str) -> None:
     is_dark = theme == "dark"
 
-    bg = BRAND_COLORS["neutral_900"] if is_dark else "#ffffff"
-    surface = "#020617" if is_dark else "#ffffff"
-    border = BRAND_COLORS["neutral_700"] if is_dark else BRAND_COLORS["neutral_200"]
-    text_primary = "#f9fafb" if is_dark else BRAND_COLORS["neutral_900"]
-    text_secondary = "#9ca3af" if is_dark else BRAND_COLORS["neutral_600"]
+    # Proper light/dark palettes that affect the whole app, not just the hero.
+    if is_dark:
+        # Dark mode
+        bg = "#020617"  # almost-black slate
+        surface = "#020617"
+        border = BRAND_COLORS["neutral_700"]
+        text_primary = "#e5e7eb"
+        text_secondary = "#9ca3af"
+        hero_overlay = "rgba(15, 23, 42, 0.85)"
+        step_bg = "rgba(15, 23, 42, 0.65)"
+    else:
+        # Light mode
+        bg = "#f3f4f6"  # light gray background
+        surface = "#ffffff"
+        border = BRAND_COLORS["neutral_200"]
+        text_primary = BRAND_COLORS["neutral_900"]
+        text_secondary = BRAND_COLORS["neutral_600"]
+        hero_overlay = "rgba(249, 250, 251, 0.9)"
+        step_bg = "#f9fafb"
 
     st.markdown(
         f"""
@@ -83,6 +97,8 @@ def apply_theme_css(theme: str) -> None:
             --brand-border: {border};
             --brand-bg: {bg};
             --brand-surface: {surface};
+            --brand-hero-overlay: {hero_overlay};
+            --brand-step-surface: {step_bg};
             --brand-text-primary: {text_primary};
             --brand-text-secondary: {text_secondary};
             --space-xs: {SPACING_SCALE["xs"]};
@@ -92,11 +108,33 @@ def apply_theme_css(theme: str) -> None:
             --space-xl: {SPACING_SCALE["xl"]};
         }}
 
-        body {{
-            background: var(--brand-bg);
-            color: var(--brand-text-primary);
+        html, body, [data-testid="stAppViewContainer"], .stApp {{
+            background: var(--brand-bg) !important;
+            color: var(--brand-text-primary) !important;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
                          "Inter", "Segoe UI", sans-serif;
+        }}
+
+        [data-testid="stSidebar"] {{
+            background-color: var(--brand-surface) !important;
+            color: var(--brand-text-primary) !important;
+        }}
+
+        /* Make the dark-mode toggle label always readable */
+        label[for*="Dark mode"], div[role="switch"] span {{
+            color: var(--brand-text-primary) !important;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }}
+
+        /* Tabs: ensure emoji + text both visible with good contrast */
+        [data-baseweb="tab-list"] button, [data-baseweb="tab"] {{
+            color: var(--brand-text-primary) !important;
+            font-weight: 500;
+        }}
+
+        [data-baseweb="tab"] span {{
+            color: inherit !important;
         }}
 
         /* Typography hierarchy */
@@ -143,10 +181,13 @@ def apply_theme_css(theme: str) -> None:
             padding: var(--space-lg);
             border-radius: 18px;
             border: 1px solid var(--brand-border);
-            background: radial-gradient(circle at top left,
-                        rgba(37, 99, 235, 0.10),
-                        transparent 60%),
-                        var(--brand-surface);
+            background:
+                radial-gradient(circle at top left,
+                    rgba(37, 99, 235, 0.20),
+                    transparent 55%),
+                linear-gradient(135deg,
+                    var(--brand-hero-overlay),
+                    var(--brand-surface));
             margin-bottom: var(--space-lg);
         }}
 
@@ -154,7 +195,7 @@ def apply_theme_css(theme: str) -> None:
             padding: var(--space-md);
             border-radius: 14px;
             border: 1px dashed var(--brand-border);
-            background: rgba(15, 23, 42, 0.02);
+            background: var(--brand-step-surface);
         }}
 
         .ll-step-badge {{
