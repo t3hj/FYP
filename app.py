@@ -6,19 +6,212 @@ from src.services.ai_service import VALID_CATEGORIES, VALID_SEVERITIES
 from src.services.backup_service import BackupService
 from src.services.upload_service import UploadService
 
+BRAND_COLORS = {
+    "primary": "#2563eb",
+    "primary_soft": "#dbeafe",
+    "accent": "#f97316",
+    "accent_soft": "#fff7ed",
+    "neutral_100": "#f9fafb",
+    "neutral_200": "#e5e7eb",
+    "neutral_300": "#d1d5db",
+    "neutral_600": "#4b5563",
+    "neutral_700": "#374151",
+    "neutral_900": "#111827",
+}
+
 SEVERITY_COLOURS = {
-    "Low": "#27ae60",
-    "Medium": "#f39c12",
-    "High": "#e74c3c",
-    "Critical": "#8e44ad",
+    "Low": "#22c55e",
+    "Medium": "#f97316",
+    "High": "#ef4444",
+    "Critical": "#7c3aed",
+}
+
+SPACING_SCALE = {
+    "xs": "4px",
+    "sm": "8px",
+    "md": "16px",
+    "lg": "24px",
+    "xl": "32px",
 }
 
 
+def init_theme() -> str:
+    """Initialise light/dark theme from session state or URL and return active theme."""
+    # Read from query params first for persistence between reloads
+    try:
+        params = st.query_params  # streamlit >= 1.36 style API
+        url_theme = params.get("theme", ["light"])
+        url_theme = url_theme[0] if isinstance(url_theme, list) else url_theme
+    except Exception:
+        # Fallback for older Streamlit versions
+        params = st.experimental_get_query_params()
+        url_theme = params.get("theme", ["light"])[0] if params.get("theme") else "light"
+
+    if "theme" not in st.session_state:
+        st.session_state.theme = url_theme if url_theme in {"light", "dark"} else "light"
+
+    return st.session_state.theme
+
+
+def set_theme(theme: str) -> None:
+    if theme not in {"light", "dark"}:
+        return
+    st.session_state.theme = theme
+    try:
+        st.query_params["theme"] = theme  # type: ignore[index]
+    except Exception:
+        st.experimental_set_query_params(theme=theme)
+
+
+def apply_theme_css(theme: str) -> None:
+    is_dark = theme == "dark"
+
+    bg = BRAND_COLORS["neutral_900"] if is_dark else "#ffffff"
+    surface = "#020617" if is_dark else "#ffffff"
+    border = BRAND_COLORS["neutral_700"] if is_dark else BRAND_COLORS["neutral_200"]
+    text_primary = "#f9fafb" if is_dark else BRAND_COLORS["neutral_900"]
+    text_secondary = "#9ca3af" if is_dark else BRAND_COLORS["neutral_600"]
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --brand-primary: {BRAND_COLORS["primary"]};
+            --brand-primary-soft: {BRAND_COLORS["primary_soft"]};
+            --brand-accent: {BRAND_COLORS["accent"]};
+            --brand-accent-soft: {BRAND_COLORS["accent_soft"]};
+            --brand-border: {border};
+            --brand-bg: {bg};
+            --brand-surface: {surface};
+            --brand-text-primary: {text_primary};
+            --brand-text-secondary: {text_secondary};
+            --space-xs: {SPACING_SCALE["xs"]};
+            --space-sm: {SPACING_SCALE["sm"]};
+            --space-md: {SPACING_SCALE["md"]};
+            --space-lg: {SPACING_SCALE["lg"]};
+            --space-xl: {SPACING_SCALE["xl"]};
+        }}
+
+        body {{
+            background: var(--brand-bg);
+            color: var(--brand-text-primary);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                         "Inter", "Segoe UI", sans-serif;
+        }}
+
+        /* Typography hierarchy */
+        .ll-hero-title {{
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                         "Inter", "Segoe UI", sans-serif;
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            margin-bottom: var(--space-xs);
+        }}
+
+        .ll-hero-subtitle {{
+            font-size: 0.95rem;
+            color: var(--brand-text-secondary);
+            max-width: 520px;
+        }}
+
+        .ll-meta-text {{
+            font-size: 0.8rem;
+            color: var(--brand-text-secondary);
+        }}
+
+        .ll-helper-text {{
+            font-size: 0.8rem;
+            color: var(--brand-text-secondary);
+        }}
+
+        .ll-status-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            background: rgba(15, 118, 110, 0.08);
+            color: var(--brand-text-secondary);
+        }}
+
+        /* Hero + cards */
+        .ll-hero-card {{
+            padding: var(--space-lg);
+            border-radius: 18px;
+            border: 1px solid var(--brand-border);
+            background: radial-gradient(circle at top left,
+                        rgba(37, 99, 235, 0.10),
+                        transparent 60%),
+                        var(--brand-surface);
+            margin-bottom: var(--space-lg);
+        }}
+
+        .ll-step-card {{
+            padding: var(--space-md);
+            border-radius: 14px;
+            border: 1px dashed var(--brand-border);
+            background: rgba(15, 23, 42, 0.02);
+        }}
+
+        .ll-step-badge {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 999px;
+            background: var(--brand-primary-soft);
+            color: var(--brand-primary);
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: var(--space-sm);
+        }}
+
+        /* Report cards & badges */
+        .ll-report-card {{
+            border-radius: 14px;
+            border: 1px solid var(--brand-border);
+            padding: var(--space-md);
+            background: var(--brand-surface);
+        }}
+
+        .ll-empty-state {{
+            border-radius: 18px;
+            border: 1px dashed var(--brand-border);
+            padding: var(--space-lg);
+            text-align: center;
+            background: rgba(15, 23, 42, 0.02);
+        }}
+
+        .ll-empty-emoji {{
+            font-size: 2rem;
+            margin-bottom: var(--space-sm);
+        }}
+
+        .ll-empty-title {{
+            font-weight: 600;
+            margin-bottom: var(--space-xs);
+        }}
+
+        .ll-empty-subtitle {{
+            font-size: 0.9rem;
+            color: var(--brand-text-secondary);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def severity_badge(severity: str) -> str:
-    colour = SEVERITY_COLOURS.get(severity, "#7f8c8d")
+    colour = SEVERITY_COLOURS.get(severity, "#6b7280")
     return (
-        f'<span style="background:{colour};color:white;padding:3px 10px;'
-        f'border-radius:12px;font-size:0.78rem;font-weight:600;">'
+        f'<span class="ll-status-pill" '
+        f'style="background:{colour}1a;color:#111827;">'
         f"{severity}</span>"
     )
 
@@ -26,15 +219,90 @@ def severity_badge(severity: str) -> str:
 def main():
     st.set_page_config(page_title="Local Lens", page_icon="📸", layout="wide")
 
-    st.markdown(
-        """
-        <h1 style='margin-bottom:0'>📸 Local Lens</h1>
-        <p style='color:#666;margin-top:4px'>
-        Upload a photo of a community issue — AI fills the report for you.
-        </p>
-        """,
-        unsafe_allow_html=True,
-    )
+    active_theme = init_theme()
+    apply_theme_css(active_theme)
+
+    header_col, toggle_col = st.columns([6, 1])
+    with header_col:
+        st.markdown(
+            """
+            <div class="ll-hero-card">
+                <div class="ll-hero-title">📸 Local Lens</div>
+                <p class="ll-hero-subtitle">
+                    Turn quick snapshots into structured council-ready reports.
+                    Upload an image, let AI analyse it, and submit in under a minute.
+                </p>
+                <div style="margin-top:16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                    <button disabled style="
+                        background: var(--brand-primary);
+                        color: #ffffff;
+                        border: none;
+                        border-radius: 999px;
+                        padding: 8px 16px;
+                        font-size: 0.9rem;
+                        font-weight: 600;
+                        cursor: pointer;
+                    ">
+                        Start a new report ↓
+                    </button>
+                    <span class="ll-helper-text">
+                        Go to <strong>Report an Issue</strong> below to begin.
+                    </span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with toggle_col:
+        st.markdown("<div style='text-align:right'>", unsafe_allow_html=True)
+        is_dark = active_theme == "dark"
+        new_is_dark = st.toggle("Dark mode", value=is_dark)
+        if new_is_dark != is_dark:
+            set_theme("dark" if new_is_dark else "light")
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 3-step visual guide
+    step_col1, step_col2, step_col3 = st.columns(3)
+    with step_col1:
+        st.markdown(
+            """
+            <div class="ll-step-card">
+                <div class="ll-step-badge">1</div>
+                <div><strong>Upload an image</strong></div>
+                <div class="ll-helper-text">
+                    Snap a quick photo of a street, park, or public space issue.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with step_col2:
+        st.markdown(
+            """
+            <div class="ll-step-card">
+                <div class="ll-step-badge">2</div>
+                <div><strong>AI analyses it</strong></div>
+                <div class="ll-helper-text">
+                    Our AI suggests a title, severity, category, and recommended action.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with step_col3:
+        st.markdown(
+            """
+            <div class="ll-step-card">
+                <div class="ll-step-badge">3</div>
+                <div><strong>Submit to council</strong></div>
+                <div class="ll-helper-text">
+                    Review the auto-filled form, edit if needed, then submit your report.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     if REQUIRE_AI:
         if ENABLE_OLLAMA:
@@ -127,7 +395,7 @@ def main():
                 st.image(file_bytes, use_container_width=True)
                 sev = analysis.get("severity") or "Medium"
                 st.markdown(
-                    f"**AI Severity Assessment:** {severity_badge(sev)}",
+                    f"<span class='ll-meta-text'>AI severity assessment</span> {severity_badge(sev)}",
                     unsafe_allow_html=True,
                 )
                 st.caption(f"File: {filename}")
@@ -285,7 +553,19 @@ def main():
     with tab_reports:
         st.subheader("Community Reports")
         if not reports:
-            st.info("No reports submitted yet. Be the first!")
+            st.markdown(
+                """
+                <div class="ll-empty-state">
+                    <div class="ll-empty-emoji">🗂️</div>
+                    <div class="ll-empty-title">No reports yet</div>
+                    <div class="ll-empty-subtitle">
+                        When residents start submitting reports, they will appear here with
+                        AI-assessed severity, categories, and locations.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         else:
             filter_col1, filter_col2, filter_col3 = st.columns(3)
             with filter_col1:
@@ -329,7 +609,11 @@ def main():
                     header_col, meta_col = st.columns([3, 1])
                     with header_col:
                         st.markdown(f"**{title_text}**&nbsp;&nbsp;{badge}", unsafe_allow_html=True)
-                        st.caption(f"🏷️ {cat}  |  📍 {loc}  |  📅 {date}")
+                        st.caption(
+                            f"<span class='ll-meta-text'>🏷️ {cat}  |  📍 {loc}  |  "
+                            f"📅 {date}</span>",
+                            unsafe_allow_html=True,
+                        )
                     with meta_col:
                         if image_url:
                             st.image(image_url, width=120)
@@ -356,9 +640,33 @@ def main():
                 st.map(map_points)
                 st.caption(f"Showing {len(map_points)} geo-tagged report locations.")
             else:
-                st.info("No coordinates found yet. Geo-tagged reports will appear here automatically.")
+                st.markdown(
+                    """
+                    <div class="ll-empty-state">
+                        <div class="ll-empty-emoji">🗺️</div>
+                        <div class="ll-empty-title">No map data yet</div>
+                        <div class="ll-empty-subtitle">
+                            Reports with valid latitude and longitude will automatically appear
+                            on this map once residents submit them.
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
         else:
-            st.info("No reports yet.")
+            st.markdown(
+                """
+                <div class="ll-empty-state">
+                    <div class="ll-empty-emoji">🗺️</div>
+                    <div class="ll-empty-title">No reports yet</div>
+                    <div class="ll-empty-subtitle">
+                        Start by submitting a report in the first tab. Locations will appear
+                        on the map as geo-tagged reports are created.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
     # ── TAB 4: Council Insights ────────────────────────────────────────────────
     with tab_insights:
         st.subheader("Council Insights")
@@ -381,7 +689,19 @@ def main():
 
         if st.session_state.get("council_authed", False) or not COUNCIL_ADMIN_PASSWORD:
             if not reports:
-                st.info("No reports yet. Council analytics will appear here once residents submit reports.")
+                st.markdown(
+                    """
+                    <div class="ll-empty-state">
+                        <div class="ll-empty-emoji">📊</div>
+                        <div class="ll-empty-title">Analytics will appear here</div>
+                        <div class="ll-empty-subtitle">
+                            Once residents start submitting reports, you will see breakdowns
+                            by category, severity, and trends over time.
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             else:
                 df = pd.DataFrame(reports)
 
