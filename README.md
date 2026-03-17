@@ -1,101 +1,137 @@
-# Streamlit Image Upload Application
+# Local Lens
 
-This project is a Streamlit web application designed for image upload and data management, featuring a central hosted database and cloud storage for images. The application ensures data integrity through backups and versioning.
+Local Lens is a Streamlit app for reporting community issues from photos. Residents upload an image, AI extracts issue details, location data is captured or inferred, and reports are stored in Supabase for council review.
 
-## Key Features
-- **Image Upload**: Users can upload images through a user-friendly interface.
-- **Image Gallery**: View uploaded images in a gallery format.
-- **Version History**: Track changes and versions of uploaded images.
-- **Backup and Restore**: Manage backups of the database and image storage to prevent data loss.
+## What Local Lens Does
+- AI-assisted issue reporting from uploaded photos
+- Structured report form pre-filled with title, category, severity, details, and recommended action
+- Geolocation support from EXIF GPS data and optional geocoding fallback
+- Report listing with search and filters
+- Map view for geo-tagged reports
+- Council-only insights dashboard (password protected)
+- One-click metadata backups to local JSON files
+- Duplicate protection for identical photos and short-term repeat submissions
 
-## Project Structure
-- `app.py`: Main entry point for the Streamlit application.
-- `requirements.txt`: Lists Python dependencies required for the project.
-- `README.md`: Documentation for the project.
-- `.env.example`: Template for environment variables.
-- `.gitignore`: Specifies files to be ignored by Git.
-- `config/`: Contains configuration settings and logging setup.
-- `src/`: Contains the core application logic, including database, storage, backup, services, and utilities.
-- `pages/`: Contains Streamlit pages for different functionalities.
-- `tests/`: Contains unit tests for various components of the application.
-- `scripts/`: Contains scripts for backup, migration, and cloud resource setup.
-- `docker/`: Contains Docker configuration files for containerization.
+## App Tabs
+- Report an Issue: Upload photo, review AI output, and submit a structured report
+- View Reports: Search, filter, and browse all submitted reports
+- Map: Visualize report locations with valid coordinates
+- Council Insights: Category, severity, and time-based charts for council staff
+- Backup: Trigger and view local backup exports
 
-## Setup Instructions
+## Tech Stack
+- Streamlit
+- Supabase (database + storage)
+- Ollama (optional vision analysis)
+- Pandas, Pillow, Requests, Geopy
+
+## Project Layout
+- app.py: Main Streamlit entry point
+- config/: Secrets and runtime settings
+- src/services/: Upload, AI, and backup services
+- src/database/: Supabase client and schema migration files
+- src/ui/: Theme, reusable components, and tab renderers
+- src/utils/: Validation, image metadata, geolocation, and geocoding helpers
+- tests/: Test suites for storage and service modules
+- docker/: Dockerfile and compose setup
+
+## Quick Start
 1. Clone the repository:
-   ```
+   ```bash
    git clone https://github.com/t3hj/FYP.git
    cd FYP
    ```
 
-2. Create a virtual environment and activate it:
-   ```
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+2. Create and activate a virtual environment:
+   ```bash
+   python -m venv .venv
+   # Windows PowerShell
+   .\.venv\Scripts\Activate.ps1
+   # macOS/Linux
+   source .venv/bin/activate
    ```
 
-3. Install the required dependencies:
-   ```
+3. Install dependencies:
+   ```bash
    pip install -r requirements.txt
    ```
 
-4. Configure environment variables by copying `.env.example` to `.env` and filling in the necessary values.
+4. Add Streamlit secrets in .streamlit/secrets.toml:
+   ```toml
+   SUPABASE_URL = "https://your-project.supabase.co"
+   SUPABASE_KEY = "your-service-or-anon-key"
+   SUPABASE_BUCKET = "report-images"
+   SUPABASE_TABLE = "reports"
 
-5. Run the application:
+   ENABLE_OLLAMA = "false"
+   OLLAMA_URL = "http://localhost:11434"
+   OLLAMA_MODEL = "llava"
+
+   REQUIRE_AI = "false"
+   REQUIRE_GEOLOCATION = "false"
+   ENABLE_GEOCODING = "true"
+
+   COUNCIL_ADMIN_PASSWORD = "change-me"
    ```
+
+5. Run the app:
+   ```bash
    streamlit run app.py
    ```
 
-## Supabase Requirements
-Create a `reports` table that supports uploaded image metadata. At minimum, ensure these columns exist:
-- `id` (primary key)
-- `filename` (text)
-- `cloud_storage_url` (text)
-- `upload_date` (timestamp/text)
-- `version` (integer)
+## Required Supabase Schema
+Use a reports table with fields expected by the upload flow.
 
-To support map view and AI-enriched fields, also add:
-- `category` (text)
-- `additional_details` (text)
-- `location` (text)
-- `latitude` (double precision)
-- `longitude` (double precision)
+Core fields:
+- id (primary key)
+- filename (text)
+- cloud_storage_url (text)
+- upload_date (timestamp/text)
+- version (integer)
 
-## Ollama (Optional)
-The app can run optional local Ollama vision analysis during upload.
-- Set `ENABLE_OLLAMA = "true"` in Streamlit secrets to enable.
-- Configure `OLLAMA_URL` and `OLLAMA_MODEL`.
-- If Ollama is unavailable, uploads still succeed and the app falls back to EXIF/manual data.
+AI and report metadata:
+- title (text)
+- category (text)
+- severity (text)
+- additional_details (text)
+- recommended_action (text)
+- location (text)
+- latitude (double precision)
+- longitude (double precision)
 
-## Strict AI + Geolocation Mode
-To make AI detection always active and enforce minimal manual form entry:
-- Set `REQUIRE_AI = "true"` to block uploads unless AI analysis succeeds.
-- Set `REQUIRE_GEOLOCATION = "true"` to block uploads unless coordinates are available.
-- Keep `ENABLE_GEOCODING = "true"` so location text can be geocoded when EXIF GPS is missing.
+Anti-duplicate support:
+- reporter_id (text)
+- image_hash (text)
 
-Example Streamlit secrets:
+Note: the service includes compatibility fallbacks for legacy columns such as image_path and created_at.
+
+## Configuration Modes
+- Optional AI mode:
+  - ENABLE_OLLAMA = "true" enables Ollama-based analysis
+  - If disabled, users can still submit reports manually
+
+- Strict AI mode:
+  - REQUIRE_AI = "true" blocks submission if AI analysis fails
+
+- Strict geolocation mode:
+  - REQUIRE_GEOLOCATION = "true" blocks submission without coordinates
+  - ENABLE_GEOCODING = "true" allows geocoding from location text when GPS is missing
+
+## Docker
+Docker assets are available in docker/:
+- docker/Dockerfile
+- docker/docker-compose.yml
+
+Build and run with your preferred Docker workflow.
+
+## Testing
+Run tests with:
+```bash
+pytest
 ```
-ENABLE_OLLAMA = "true"
-OLLAMA_URL = "https://your-ollama-endpoint"
-OLLAMA_MODEL = "llava"
-REQUIRE_AI = "true"
-REQUIRE_GEOLOCATION = "true"
-ENABLE_GEOCODING = "true"
-```
-
-Note: `http://localhost:11434` only works on the machine running the app. For Streamlit Cloud, host Ollama on a reachable public endpoint.
-
-## Usage
-- Navigate to the upload page to upload images.
-- View the gallery to see all uploaded images.
-- Check the version history to track changes.
-- Use the backup and restore page to manage data backups.
-
-## Backup and Versioning
-The application includes a robust backup system that regularly saves the database and image storage to prevent data loss. Versioning allows users to revert to previous versions of images if needed.
 
 ## Contributing
-Contributions are welcome! Please open an issue or submit a pull request for any enhancements or bug fixes.
+Contributions are welcome. Open an issue or submit a pull request with a clear description of the change.
 
 ## License
-This project is licensed under the MIT License. See the LICENSE file for details.
+This project is licensed under the MIT License.
