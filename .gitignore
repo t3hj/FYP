@@ -16,3 +16,8 @@ backups/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local tunnelling tools / logs
+cloudflared.exe
+cloudflared.log
+ngrok-latest.zip
