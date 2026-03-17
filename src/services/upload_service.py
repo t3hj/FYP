@@ -13,7 +13,7 @@ from config.settings import (
 )
 from src.database.supabase_client import get_supabase_client
 from src.services.ai_service import analyze_issue_image
-from src.utils.geocoding import geocode_location
+from src.utils.geocoding import geocode_location, reverse_geocode_location
 from src.utils.geolocation import extract_gps_from_image_bytes
 from src.utils.validators import validate_image_format
 
@@ -297,6 +297,10 @@ class UploadService:
         location = ai_result.get("location_hint")
         latitude = inferred_latitude
         longitude = inferred_longitude
+
+        # Fallback: if Claude didn't extract location but EXIF has GPS, reverse geocode it
+        if (not location or not str(location).strip()) and latitude is not None and longitude is not None:
+            location = reverse_geocode_location(latitude, longitude)
 
         if (latitude is None or longitude is None) and ENABLE_GEOCODING and location:
             geocoded_lat, geocoded_lon = geocode_location(location)
