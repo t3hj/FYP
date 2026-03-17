@@ -6,3 +6,4 @@ python-dotenv
 requests
 geopy
 supabase>=2.0.0
+anthropic

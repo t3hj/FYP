@@ -3,7 +3,12 @@ import json
 
 import requests
 
-from config.settings import ENABLE_OLLAMA, OLLAMA_MODEL, OLLAMA_URL
+from config.settings import (
+    ANTHROPIC_API_KEY,
+    ENABLE_OLLAMA,
+    OLLAMA_MODEL,
+    OLLAMA_URL,
+)
 
 VALID_CATEGORIES = [
     "Pothole",
@@ -22,115 +27,146 @@ VALID_CATEGORIES = [
 
 VALID_SEVERITIES = ["Low", "Medium", "High", "Critical"]
 
+_PROMPT = (
+    "Analyze this image of a community issue. "
+    "Reply with ONLY a JSON object, no other text. "
+    "Use these exact keys:\n"
+    "category (one of: {categories}), "
+    "severity (one of: Low, Medium, High, Critical), "
+    "title (short headline under 10 words), "
+    "description (1-2 sentences about what is wrong), "
+    "location_hint (any visible street name or landmark, or null), "
+    "recommended_action (what the council should do).\n"
+    'Example: {{"category":"Pothole","severity":"High",'
+    '"title":"Large pothole on main road",'
+    '"description":"Deep pothole causing vehicle damage.",'
+    '"location_hint":null,"recommended_action":"Fill and repave pothole."}}'
+)
 
-def analyze_issue_image(file_bytes, filename):
-    """
-    Analyze an image of a community issue using Ollama LLaVA.
-    Returns a rich structured result mimicking a FixMyStreet-style report
-    so users are not required to fill in any form fields manually.
-    """
-    if not ENABLE_OLLAMA:
-        return {
-            "enabled": False,
-            "title": None,
-            "category": None,
-            "severity": None,
-            "description": None,
-            "location_hint": None,
-            "recommended_action": None,
-            "raw": None,
-            "error": None,
-        }
 
+def _empty_result(enabled: bool, error=None):
+    return {
+        "enabled": enabled,
+        "title": None,
+        "category": None,
+        "severity": None,
+        "description": None,
+        "location_hint": None,
+        "recommended_action": None,
+        "raw": None,
+        "error": error,
+    }
+
+
+def _parse_ai_response(content: str) -> dict:
+    """Parse JSON from AI response text, with fallback bracket search."""
+    parsed = {}
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        start, end = content.find("{"), content.rfind("}")
+        if start != -1 and end > start:
+            try:
+                parsed = json.loads(content[start: end + 1])
+            except json.JSONDecodeError:
+                pass
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize(parsed: dict) -> dict:
+    raw_cat = str(parsed.get("category") or "Other").strip()
+    raw_sev = str(parsed.get("severity") or "Medium").strip()
+    return {
+        "enabled": True,
+        "title": parsed.get("title"),
+        "category": raw_cat if raw_cat in VALID_CATEGORIES else "Other",
+        "severity": raw_sev if raw_sev in VALID_SEVERITIES else "Medium",
+        "description": parsed.get("description"),
+        "location_hint": parsed.get("location_hint"),
+        "recommended_action": parsed.get("recommended_action"),
+        "raw": json.dumps(parsed),
+        "error": None,
+    }
+
+
+def _analyze_with_claude(file_bytes: bytes, filename: str) -> dict:
+    """Use Anthropic Claude (claude-haiku) for vision analysis."""
+    try:
+        import anthropic
+
+        # Detect media type from filename
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpeg"
+        media_type_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
+        media_type = media_type_map.get(ext, "image/jpeg")
+
+        encoded = base64.standard_b64encode(file_bytes).decode("utf-8")
+        prompt = _PROMPT.format(categories=", ".join(VALID_CATEGORIES))
+
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": encoded,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+
+        content = message.content[0].text.strip() if message.content else ""
+        parsed = _parse_ai_response(content)
+        return _normalize(parsed)
+
+    except Exception as e:
+        return {**_empty_result(True), "error": str(e)}
+
+
+def _analyze_with_ollama(file_bytes: bytes, filename: str) -> dict:
+    """Use local Ollama (LLaVA) for vision analysis."""
     try:
         encoded = base64.b64encode(file_bytes).decode("utf-8")
-
-        categories_str = ", ".join(VALID_CATEGORIES)
-        prompt = (
-            "Analyze this image of a community issue. "
-            "Reply with ONLY a JSON object, no other text. "
-            "Use these exact keys:\n"
-            f"category (one of: {categories_str}), "
-            "severity (one of: Low, Medium, High, Critical), "
-            "title (short headline under 10 words), "
-            "description (1-2 sentences about what is wrong), "
-            "location_hint (any visible street name or landmark, or null), "
-            "recommended_action (what the council should do).\n"
-            "Example: {\"category\":\"Pothole\",\"severity\":\"High\","
-            "\"title\":\"Large pothole on main road\","
-            "\"description\":\"Deep pothole causing vehicle damage.\","
-            "\"location_hint\":null,\"recommended_action\":\"Fill and repave pothole.\"}"
-        )
+        prompt = _PROMPT.format(categories=", ".join(VALID_CATEGORIES))
 
         response = requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/chat",
             json={
                 "model": OLLAMA_MODEL,
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                        "images": [encoded],
-                    }
+                    {"role": "user", "content": prompt, "images": [encoded]}
                 ],
                 "stream": False,
             },
             timeout=300,
         )
         response.raise_for_status()
-
-        content = (
-            response.json()
-            .get("message", {})
-            .get("content", "")
-            .strip()
-        )
-
-        parsed = {}
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            start = content.find("{")
-            end = content.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                try:
-                    parsed = json.loads(content[start : end + 1])
-                except json.JSONDecodeError:
-                    parsed = {}
-
-        if not isinstance(parsed, dict):
-            parsed = {}
-
-        # Validate / normalise category
-        raw_category = str(parsed.get("category") or "Other").strip()
-        category = raw_category if raw_category in VALID_CATEGORIES else "Other"
-
-        # Validate / normalise severity
-        raw_severity = str(parsed.get("severity") or "Medium").strip()
-        severity = raw_severity if raw_severity in VALID_SEVERITIES else "Medium"
-
-        return {
-            "enabled": True,
-            "title": parsed.get("title"),
-            "category": category,
-            "severity": severity,
-            "description": parsed.get("description"),
-            "location_hint": parsed.get("location_hint"),
-            "recommended_action": parsed.get("recommended_action"),
-            "raw": content,
-            "error": None,
-        }
+        content = response.json().get("message", {}).get("content", "").strip()
+        parsed = _parse_ai_response(content)
+        return _normalize(parsed)
 
     except Exception as e:
-        return {
-            "enabled": True,
-            "title": None,
-            "category": None,
-            "severity": None,
-            "description": None,
-            "location_hint": None,
-            "recommended_action": None,
-            "raw": None,
-            "error": str(e),
-        }
+        return {**_empty_result(True), "error": str(e)}
 
+
+def analyze_issue_image(file_bytes: bytes, filename: str) -> dict:
+    """
+    Analyze an image of a community issue.
+    Priority: Claude API (cloud) → Ollama (local) → disabled.
+    """
+    if ANTHROPIC_API_KEY:
+        return _analyze_with_claude(file_bytes, filename)
+
+    if ENABLE_OLLAMA:
+        return _analyze_with_ollama(file_bytes, filename)
+
+    return _empty_result(enabled=False)

@@ -13,6 +13,9 @@ ENABLE_OLLAMA = str(st.secrets.get("ENABLE_OLLAMA", os.getenv("ENABLE_OLLAMA", "
 REQUIRE_AI = str(st.secrets.get("REQUIRE_AI", os.getenv("REQUIRE_AI", "false"))).lower() == "true"
 REQUIRE_GEOLOCATION = str(st.secrets.get("REQUIRE_GEOLOCATION", os.getenv("REQUIRE_GEOLOCATION", "false"))).lower() == "true"
 ENABLE_GEOCODING = str(st.secrets.get("ENABLE_GEOCODING", os.getenv("ENABLE_GEOCODING", "true"))).lower() == "true"
+# Anthropic Claude API key — used for cloud-hosted AI image analysis
+ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY", ""))
+
 
 # Optional password protecting council-only views such as analytics.
 # Set COUNCIL_ADMIN_PASSWORD in `.streamlit/secrets.toml` or environment variables.
