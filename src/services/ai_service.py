@@ -1,7 +1,9 @@
 import base64
+import io
 import json
 
 import requests
+from PIL import Image
 
 from config.settings import (
     ANTHROPIC_API_KEY,
@@ -89,17 +91,62 @@ def _normalize(parsed: dict) -> dict:
     }
 
 
+def _compress_image_if_needed(file_bytes: bytes, max_size_mb: float = 5.0) -> bytes:
+    """
+    Compress image if it exceeds max_size_mb.
+    Claude's API has a 5MB limit for images.
+    """
+    # Check if compression is needed
+    if len(file_bytes) <= (max_size_mb * 1024 * 1024):
+        return file_bytes
+    
+    try:
+        # Open image and resize
+        img = Image.open(io.BytesIO(file_bytes))
+        
+        # Convert RGBA to RGB if needed (for JPEG export)
+        if img.mode == "RGBA":
+            rgb_img = Image.new("RGB", img.size, (255, 255, 255))
+            rgb_img.paste(img, mask=img.split()[3])
+            img = rgb_img
+        
+        # Resize to reasonable dimensions (max 2048 pixels on longest side)
+        img.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+        
+        # Compress and save as JPEG
+        output = io.BytesIO()
+        quality = 85
+        while quality >= 50:
+            output.seek(0)
+            output.truncate(0)
+            img.save(output, format="JPEG", quality=quality, optimize=True)
+            if len(output.getvalue()) <= (max_size_mb * 1024 * 1024):
+                return output.getvalue()
+            quality -= 5
+        
+        # Fallback: return best effort at quality 50
+        return output.getvalue()
+    
+    except Exception:
+        # If compression fails, return original (Claude will error but gracefully)
+        return file_bytes
+
+
+
 def _analyze_with_claude(file_bytes: bytes, filename: str) -> dict:
     """Use Anthropic Claude (claude-haiku) for vision analysis."""
     try:
         import anthropic
+
+        # Compress image if needed (Claude has 5MB limit)
+        compressed_bytes = _compress_image_if_needed(file_bytes, max_size_mb=5.0)
 
         # Detect media type from filename
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpeg"
         media_type_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
         media_type = media_type_map.get(ext, "image/jpeg")
 
-        encoded = base64.standard_b64encode(file_bytes).decode("utf-8")
+        encoded = base64.standard_b64encode(compressed_bytes).decode("utf-8")
         prompt = _PROMPT.format(categories=", ".join(VALID_CATEGORIES))
 
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
