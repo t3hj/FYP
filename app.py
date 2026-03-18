@@ -87,7 +87,7 @@ def main():
         render_map_tab(reports)
     # ── TAB 4: Council Insights ────────────────────────────────────────────────
     with tab_insights:
-        render_insights_tab(reports, COUNCIL_ADMIN_PASSWORD)
+        render_insights_tab(reports, COUNCIL_ADMIN_PASSWORD, upload_service)
 
     # ── TAB 5: Backup ──────────────────────────────────────────────────────────
     with tab_backup:
