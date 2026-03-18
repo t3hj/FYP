@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from datetime import datetime, timedelta
 
 
 def render_insights_tab(reports: list[dict], council_password: str) -> None:
@@ -44,42 +45,123 @@ def render_insights_tab(reports: list[dict], council_password: str) -> None:
     if "upload_date" in df.columns:
         df["upload_date"] = pd.to_datetime(df["upload_date"], errors="coerce")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Reports by Category**")
-        cat_counts = (
-            df["category"]
-            .fillna("Unknown")
-            .value_counts()
-            .rename_axis("Category")
-            .reset_index(name="Reports")
+    # Date range filter
+    col_filter1, col_filter2 = st.columns(2)
+    today = datetime.now()
+    with col_filter1:
+        date_start = st.date_input(
+            "From date",
+            value=today - timedelta(days=90),
+            key="insights_date_start"
         )
-        st.bar_chart(cat_counts.set_index("Category"))
+    with col_filter2:
+        date_end = st.date_input(
+            "To date",
+            value=today,
+            key="insights_date_end"
+        )
 
-    with col2:
-        st.markdown("**Reports by Severity**")
-        if "severity" in df.columns:
-            sev_counts = (
-                df["severity"]
-                .fillna("Medium")
-                .value_counts()
-                .rename_axis("Severity")
-                .reset_index(name="Reports")
-            )
-            st.bar_chart(sev_counts.set_index("Severity"))
+    # Filter by date range
+    mask = (df["upload_date"].dt.date >= date_start) & (df["upload_date"].dt.date <= date_end)
+    filtered_df = df[mask] if "upload_date" in df.columns else df
 
-    st.markdown("---")
-    st.markdown("**Reports Over Time**")
-    if "upload_date" in df.columns and df["upload_date"].notna().any():
+    # Key metrics
+    st.divider()
+    metric1, metric2, metric3, metric4 = st.columns(4)
+    with metric1:
+        st.metric("📋 Total Reports", len(filtered_df))
+    with metric2:
+        critical_high = 0
+        if "severity" in filtered_df.columns:
+            critical_high = len(filtered_df[filtered_df["severity"].isin(["Critical", "High"])])
+        st.metric("🚨 High Priority", critical_high, help="Critical + High severity")
+    with metric3:
+        avg_per_day = len(filtered_df) / max((date_end - date_start).days + 1, 1)
+        st.metric("📈 Reports/Day", f"{avg_per_day:.1f}")
+    with metric4:
+        categories = filtered_df["category"].nunique() if "category" in filtered_df.columns else 0
+        st.metric("🏷️ Categories", categories)
+
+    st.divider()
+
+    # Reports over time (create early for trend analysis)
+    time_series = None
+    if "upload_date" in filtered_df.columns and filtered_df["upload_date"].notna().any():
         time_series = (
-            df.dropna(subset=["upload_date"])
-            .groupby(df["upload_date"].dt.date)
+            filtered_df.dropna(subset=["upload_date"])
+            .groupby(filtered_df["upload_date"].dt.date)
             .size()
             .rename("Reports")
             .reset_index()
             .rename(columns={"upload_date": "Date"})
         )
+
+    # Top issues
+    top_col, sev_col = st.columns(2)
+    with top_col:
+        st.markdown("**🔥 Top 5 Issue Categories**")
+        if not filtered_df.empty and "category" in filtered_df.columns:
+            cat_counts = (
+                filtered_df["category"]
+                .fillna("Unknown")
+                .value_counts()
+                .head(5)
+            )
+            if not cat_counts.empty:
+                st.bar_chart(cat_counts)
+            else:
+                st.caption("No category data available")
+        else:
+            st.caption("No data for this period")
+
+    with sev_col:
+        st.markdown("**⚠️ Severity Breakdown**")
+        if not filtered_df.empty and "severity" in filtered_df.columns:
+            sev_counts = filtered_df["severity"].value_counts()
+            if not sev_counts.empty:
+                st.bar_chart(sev_counts)
+            else:
+                st.caption("No severity data available")
+        else:
+            st.caption("No severity data available")
+
+    st.divider()
+
+    # Reports over time (display)
+    st.markdown("**📅 Reports Over Time**")
+    if time_series is not None:
         st.line_chart(time_series.set_index("Date"))
     else:
-        st.caption("Report dates are not available yet for time-based analytics.")
+        st.caption("No time-based data for this period")
+
+    st.divider()
+
+    # Insights box
+    st.markdown("**💡 Key Insights**")
+    insights = []
+    
+    if not filtered_df.empty:
+        # Most reported category
+        if "category" in filtered_df.columns:
+            top_cat = filtered_df["category"].value_counts().index[0] if not filtered_df["category"].value_counts().empty else "Unknown"
+            top_cat_count = filtered_df["category"].value_counts().values[0]
+            insights.append(f"🏆 **{top_cat}** is the top reported issue ({top_cat_count} reports)")
+        
+        # Critical/high severity
+        if "severity" in filtered_df.columns:
+            critical_count = len(filtered_df[filtered_df["severity"] == "Critical"])
+            if critical_count > 0:
+                insights.append(f"🔴 **{critical_count} critical** issues require immediate attention")
+        
+        # Trend
+        if time_series is not None and len(time_series) > 1:
+            recent_avg = time_series.iloc[-7:]["Reports"].mean()
+            previous_avg = time_series.iloc[-14:-7]["Reports"].mean() if len(time_series) > 7 else recent_avg
+            trend = "📈 increasing" if recent_avg > previous_avg else "📉 decreasing"
+            insights.append(f"Trend is {trend}")
+        
+        for insight in insights:
+            st.markdown(f"- {insight}")
+    else:
+        st.info("No reports in selected date range")
 

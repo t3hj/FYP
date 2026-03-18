@@ -355,3 +355,105 @@ class UploadService:
             return normalized_rows
         except Exception:
             return []
+
+    def find_nearby_similar_reports(self, latitude, longitude, category, location_text=None, radius_km=0.5):
+        """
+        Find reports within a certain radius with the same category.
+        Uses Haversine formula for GPS coordinates, or location text matching as fallback.
+        
+        Args:
+            latitude: Report latitude (optional)
+            longitude: Report longitude (optional)
+            category: Report category
+            location_text: Location as text (optional, used if no coordinates)
+            radius_km: Search radius in kilometers (default 0.5km ≈ 500m)
+        
+        Returns:
+            List of nearby similar reports (within radius, same category)
+        """
+        if latitude is None and longitude is None and not location_text:
+            return []
+        
+        try:
+            all_reports = self.list_uploaded_images()
+        except Exception:
+            return []
+        
+        nearby = []
+        has_coordinates = latitude is not None and longitude is not None
+        
+        for report in all_reports:
+            report_lat = report.get("latitude")
+            report_lon = report.get("longitude")
+            report_location = report.get("location", "")
+            report_category = report.get("category", "Unknown")
+            
+            # Skip if different category
+            if str(report_category).strip() != str(category).strip():
+                continue
+            
+            distance_m = None
+            match_type = None
+            
+            # Try GPS-based proximity search first
+            if has_coordinates and report_lat is not None and report_lon is not None:
+                try:
+                    report_lat = float(report_lat)
+                    report_lon = float(report_lon)
+                    lat_f = float(latitude)
+                    lon_f = float(longitude)
+                    
+                    distance_km = self._haversine_distance(lat_f, lon_f, report_lat, report_lon)
+                    if distance_km <= radius_km:
+                        distance_m = int(distance_km * 1000)
+                        match_type = "proximity"
+                except (TypeError, ValueError):
+                    pass
+            
+            # Fallback to location text matching if no coordinates or GPS search didn't match
+            if match_type is None and location_text and str(report_location).strip():
+                location_normalized = str(location_text).strip().lower()
+                report_location_normalized = str(report_location).strip().lower()
+                
+                # Exact match or substring match (e.g., "Main Street" in "Main Street near Town Hall")
+                if location_normalized == report_location_normalized or \
+                   (len(location_normalized) > 4 and location_normalized in report_location_normalized) or \
+                   (len(report_location_normalized) > 4 and report_location_normalized in location_normalized):
+                    distance_m = 0  # Location match, distance unknown
+                    match_type = "location_text"
+            
+            if match_type:
+                nearby.append({
+                    "id": report.get("id"),
+                    "title": report.get("title") or report.get("filename", "Untitled"),
+                    "location": report.get("location", "Unknown"),
+                    "severity": report.get("severity", "Medium"),
+                    "category": report_category,
+                    "upload_date": report.get("upload_date", "Unknown"),
+                    "distance_m": distance_m,
+                    "match_type": match_type,
+                })
+        
+        # Sort by distance (nearest first, location matches at end)
+        nearby.sort(key=lambda r: (r["match_type"] != "proximity", r["distance_m"] if r["distance_m"] else 999))
+        return nearby
+
+    @staticmethod
+    def _haversine_distance(lat1, lon1, lat2, lon2):
+        """
+        Calculate distance between two coordinates in kilometers.
+        Uses Haversine formula.
+        """
+        from math import radians, sin, cos, sqrt, atan2
+        
+        R = 6371  # Earth's radius in kilometers
+        
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        
+        a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        distance = R * c
+        
+        return distance
