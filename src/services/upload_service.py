@@ -379,11 +379,23 @@ class UploadService:
     # ── Add these two methods to the UploadService class in upload_service.py ────
 # Paste them at the bottom of the class, before the closing of the class.
 
+    # ── Replace the existing add_vote method in UploadService with this version ──
+# The previous version read then wrote the upvote count (race condition).
+# This version uses a Supabase RPC for an atomic increment.
+#
+# FIRST: run this SQL in your Supabase SQL editor to create the function:
+#
+#   CREATE OR REPLACE FUNCTION increment_upvotes(report_id text)
+#   RETURNS void LANGUAGE sql AS $$
+#     UPDATE reports SET upvotes = COALESCE(upvotes, 0) + 1 WHERE id::text = report_id;
+#   $$;
+#
+# THEN replace the add_vote method with the code below.
+
     def add_vote(self, report_id: str, user_id: str) -> dict:
         """
         Record an upvote for a report by a user.
-        Increments the upvotes counter on the report row.
-        Returns success/failure dict.
+        Uses an atomic SQL increment via RPC to avoid race conditions.
         """
         try:
             # Insert vote record — unique constraint prevents double-voting
@@ -392,20 +404,8 @@ class UploadService:
                 "user_id": str(user_id),
             }).execute()
 
-            # Increment counter on the report
-            # Supabase doesn't have atomic increment via Python client directly,
-            # so we read then write (race condition is acceptable for upvotes)
-            current = (
-                self.client.table(self.table_name)
-                .select("upvotes")
-                .eq("id", report_id)
-                .single()
-                .execute()
-            )
-            current_count = int((current.data or {}).get("upvotes") or 0)
-            self.client.table(self.table_name).update(
-                {"upvotes": current_count + 1}
-            ).eq("id", report_id).execute()
+            # Atomic increment via Supabase RPC
+            self.client.rpc("increment_upvotes", {"report_id": str(report_id)}).execute()
 
             return {"success": True}
 
@@ -414,6 +414,19 @@ class UploadService:
             if "duplicate" in msg.lower() or "unique" in msg.lower():
                 return {"success": False, "message": "You have already upvoted this report."}
             return {"success": False, "message": msg}
+
+    def get_user_votes(self, user_id: str) -> list[str]:
+        """Return list of report_id strings the user has already upvoted."""
+        try:
+            result = (
+                self.client.table("votes")
+                .select("report_id")
+                .eq("user_id", str(user_id))
+                .execute()
+            )
+            return [row["report_id"] for row in (result.data or [])]
+        except Exception:
+            return []
 
     def get_user_votes(self, user_id: str) -> list[str]:
         """
