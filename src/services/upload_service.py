@@ -375,3 +375,58 @@ class UploadService:
             return {"success": True, "data": result.data}
         except Exception as e:
             return {"success": False, "message": str(e)}
+        
+    # ── Add these two methods to the UploadService class in upload_service.py ────
+# Paste them at the bottom of the class, before the closing of the class.
+
+    def add_vote(self, report_id: str, user_id: str) -> dict:
+        """
+        Record an upvote for a report by a user.
+        Increments the upvotes counter on the report row.
+        Returns success/failure dict.
+        """
+        try:
+            # Insert vote record — unique constraint prevents double-voting
+            self.client.table("votes").insert({
+                "report_id": str(report_id),
+                "user_id": str(user_id),
+            }).execute()
+
+            # Increment counter on the report
+            # Supabase doesn't have atomic increment via Python client directly,
+            # so we read then write (race condition is acceptable for upvotes)
+            current = (
+                self.client.table(self.table_name)
+                .select("upvotes")
+                .eq("id", report_id)
+                .single()
+                .execute()
+            )
+            current_count = int((current.data or {}).get("upvotes") or 0)
+            self.client.table(self.table_name).update(
+                {"upvotes": current_count + 1}
+            ).eq("id", report_id).execute()
+
+            return {"success": True}
+
+        except Exception as e:
+            msg = str(e)
+            if "duplicate" in msg.lower() or "unique" in msg.lower():
+                return {"success": False, "message": "You have already upvoted this report."}
+            return {"success": False, "message": msg}
+
+    def get_user_votes(self, user_id: str) -> list[str]:
+        """
+        Return a list of report_id strings that this user has upvoted.
+        Used to pre-populate the voted state in the UI.
+        """
+        try:
+            result = (
+                self.client.table("votes")
+                .select("report_id")
+                .eq("user_id", str(user_id))
+                .execute()
+            )
+            return [row["report_id"] for row in (result.data or [])]
+        except Exception:
+            return []

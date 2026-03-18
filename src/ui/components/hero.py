@@ -4,8 +4,7 @@ from src.ui.theme import set_theme
 
 
 def render_hero(active_theme: str) -> None:
-    header_col, toggle_col = st.columns([6, 1])
-    with header_col:
+     with st.container():
         st.markdown(
             """
             <div class="ll-hero-card">
@@ -35,14 +34,7 @@ def render_hero(active_theme: str) -> None:
             unsafe_allow_html=True,
         )
 
-    with toggle_col:
-        st.markdown("<div class='ll-topbar-controls'>", unsafe_allow_html=True)
-        is_dark = active_theme == "dark"
-        new_is_dark = st.toggle("Dark mode", value=is_dark, key="ll_theme_toggle")
-        if new_is_dark != is_dark:
-            set_theme("dark" if new_is_dark else "light")
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+    
 
 
 def render_onboarding_steps() -> None:

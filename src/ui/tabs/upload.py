@@ -2,6 +2,8 @@ import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
+from src.services.auth_service import is_logged_in, get_user_id
+from src.ui.components.auth import require_auth_prompt
 from src.ui.theme import severity_badge, SEVERITY_COLOURS
 
 
@@ -14,6 +16,11 @@ def render_upload_tab(
     valid_severities: list[str],
 ) -> None:
     st.subheader("Report a Community Issue")
+
+    # ── Auth gate ─────────────────────────────────────────────────────────────
+    if not require_auth_prompt("submit a Local Lens report"):
+        return
+
     st.markdown(
         "Take a photo of the problem, upload it below, and **AI automatically fills "
         "the entire report** for you. Review, adjust if needed, and submit."
@@ -48,7 +55,6 @@ def render_upload_tab(
             st.session_state.analyzed_file_id = file_id
             if result.get("success"):
                 st.session_state.pending_upload = result
-                # Reset map pin when a new image is uploaded
                 st.session_state.map_picked_lat = None
                 st.session_state.map_picked_lon = None
                 st.toast("✅ Analysis complete! Review the pre-filled report below.", icon="🤖")
@@ -66,7 +72,6 @@ def render_upload_tab(
     file_bytes = pending.get("file_bytes", b"")
     filename = pending.get("filename", "image")
 
-    # Initialise map pin session keys
     if "map_picked_lat" not in st.session_state:
         st.session_state.map_picked_lat = None
     if "map_picked_lon" not in st.session_state:
@@ -93,14 +98,13 @@ def render_upload_tab(
         st.markdown("**📝 Report Details — AI has pre-filled these for you**")
         st.caption("✏️ All fields are editable. Correct anything the AI got wrong, then submit.")
 
-        # ── PART 1: form fields above location ───────────────────────────────
+        # ── Form ─────────────────────────────────────────────────────────────
         with st.form("submit_report_form_top"):
             st.markdown("#### Essential Information")
             title = st.text_input(
                 "Report Title *",
                 value=str(analysis.get("title") or ""),
                 placeholder="Short one-line summary of the issue",
-                help="Required: Brief, clear description of the problem",
             )
 
             col_cat, col_sev = st.columns(2)
@@ -111,12 +115,7 @@ def render_upload_tab(
                     if ai_category in valid_categories
                     else len(valid_categories) - 1
                 )
-                category = st.selectbox(
-                    "Category *",
-                    options=valid_categories,
-                    index=cat_index,
-                    help="Type of community issue",
-                )
+                category = st.selectbox("Category *", options=valid_categories, index=cat_index)
             with col_sev:
                 ai_severity = str(analysis.get("severity") or "Medium")
                 sev_index = (
@@ -152,7 +151,6 @@ def render_upload_tab(
                 placeholder="e.g., Main Street near Town Hall, or postcode SW1A 1AA",
             )
 
-            # Lat/lon fields — seeded from map pin (via session state) or AI
             col_lat, col_lon = st.columns(2)
             with col_lat:
                 lat_default = st.session_state.map_picked_lat or analysis.get("latitude")
@@ -176,20 +174,19 @@ def render_upload_tab(
                 "Email Address (optional)",
                 value="",
                 placeholder="you@example.com",
-                help="Used only to prevent duplicate submissions from the same person.",
+                help="Used only to prevent duplicate submissions.",
             )
 
             st.markdown("---")
             col_submit, col_clear = st.columns([3, 1])
             with col_submit:
                 submit_report = st.form_submit_button(
-                    "✅ Submit Report", use_container_width=True, type="primary"
+                    "✅ Submit Report to Local Lens", use_container_width=True, type="primary"
                 )
             with col_clear:
                 clear_btn = st.form_submit_button("🗑️ Clear", use_container_width=True)
 
-        # ── MAP PICKER — must live outside st.form ────────────────────────────
-        # Determine best center: pinned → AI coords → London fallback
+        # ── Map picker (outside form) ─────────────────────────────────────────
         c_lat = st.session_state.map_picked_lat or analysis.get("latitude") or 51.5074
         c_lon = st.session_state.map_picked_lon or analysis.get("longitude") or -0.1278
         has_pin = st.session_state.map_picked_lat is not None
@@ -198,10 +195,7 @@ def render_upload_tab(
             "📍 Pin exact location on map" + (" ✅" if has_pin else ""),
             expanded=has_pin,
         ):
-            st.caption(
-                "Click anywhere on the map to drop a pin. "
-                "This will override the coordinates above."
-            )
+            st.caption("Click the map to drop a pin. This overrides the coordinates above.")
 
             picker_map = folium.Map(
                 location=[c_lat, c_lon],
@@ -209,7 +203,6 @@ def render_upload_tab(
                 tiles="CartoDB positron",
                 control_scale=True,
             )
-
             if has_pin:
                 folium.Marker(
                     [st.session_state.map_picked_lat, st.session_state.map_picked_lon],
@@ -225,16 +218,12 @@ def render_upload_tab(
                 returned_objects=["last_clicked"],
             )
 
-            # Update pin on click
             if map_result and map_result.get("last_clicked"):
                 clicked = map_result["last_clicked"]
                 new_lat = round(clicked["lat"], 6)
                 new_lon = round(clicked["lng"], 6)
-                # Only rerun if the click is actually different from current pin
-                if (
-                    new_lat != st.session_state.map_picked_lat
-                    or new_lon != st.session_state.map_picked_lon
-                ):
+                if (new_lat != st.session_state.map_picked_lat
+                        or new_lon != st.session_state.map_picked_lon):
                     st.session_state.map_picked_lat = new_lat
                     st.session_state.map_picked_lon = new_lon
                     st.rerun()
@@ -254,7 +243,7 @@ def render_upload_tab(
             else:
                 st.info("👆 Click the map to drop a pin at the exact problem location.")
 
-        # ── Form submission logic ─────────────────────────────────────────────
+        # ── Submission logic ──────────────────────────────────────────────────
         if clear_btn:
             st.session_state.pending_upload = None
             st.session_state.analyzed_file_id = None
@@ -263,7 +252,6 @@ def render_upload_tab(
             st.rerun()
 
         if submit_report:
-            # Map pin takes priority over manually typed coords
             if st.session_state.map_picked_lat is not None:
                 latitude_text = str(st.session_state.map_picked_lat)
                 longitude_text = str(st.session_state.map_picked_lon)
@@ -286,7 +274,7 @@ def render_upload_tab(
                 st.warning("Please provide a report title.")
                 return
 
-            reporter_id = reporter_email.strip() or None
+            reporter_id = reporter_email.strip() or get_user_id() or None
 
             final_analysis = {
                 **analysis,
@@ -326,76 +314,52 @@ def render_upload_tab(
                 st.session_state.show_duplicate_warning = True
                 st.rerun()
 
-            # Clear flags once user confirms
             if st.session_state.get("show_duplicate_warning") and st.session_state.get("confirmed_despite_duplicates"):
                 st.session_state.show_duplicate_warning = False
                 st.session_state.confirmed_despite_duplicates = False
                 nearby_reports = []
 
-            # Show duplicate warning
             if st.session_state.get("show_duplicate_warning") and nearby_reports:
-                st.warning("⚠️ **Similar reports already exist nearby!**")
+                st.warning("⚠️ **Similar reports already exist nearby on Local Lens!**")
                 st.markdown(
-                    "We found **{} {} issue{}** within 500 metres of your location. "
-                    "Please review before submitting — it helps councils avoid duplicate work.".format(
-                        len(nearby_reports),
-                        category,
+                    "We found **{} {} issue{}** within 500 metres. "
+                    "Please review before submitting.".format(
+                        len(nearby_reports), category,
                         "s" if len(nearby_reports) != 1 else "",
                     )
                 )
-
                 for i, nearby in enumerate(nearby_reports, 1):
                     sev = nearby["severity"]
                     match_type = nearby.get("match_type", "proximity")
-
                     if match_type == "location_text":
                         dist_text = "same location name"
                     elif nearby["distance_m"] is not None:
                         dist_text = (
                             f"~{nearby['distance_m']}m away"
-                            if nearby["distance_m"] >= 100
-                            else "very close by"
+                            if nearby["distance_m"] >= 100 else "very close by"
                         )
                     else:
                         dist_text = "nearby"
 
                     with st.container(border=True):
-                        col_info, col_action = st.columns([4, 1])
+                        col_info, col_act = st.columns([4, 1])
                         with col_info:
                             st.markdown(
-                                f"""
-                                <div style="display:flex;align-items:start;gap:0.5rem;">
-                                    <div style="flex:1;">
-                                        <div style="font-weight:600;margin-bottom:0.3rem;">
-                                            #{i} {nearby['title']}
-                                        </div>
-                                        <div style="font-size:0.9rem;color:#64748b;margin-bottom:0.3rem;">
-                                            📍 {nearby['location']} • {dist_text}
-                                        </div>
-                                        <div style="font-size:0.85rem;color:#94a3b8;">
-                                            🕐 {nearby['upload_date']}
-                                        </div>
-                                    </div>
-                                    <div style="flex-shrink:0;">{severity_badge(sev)}</div>
-                                </div>
-                                """,
+                                f'<div style="font-weight:600;margin-bottom:3px;">#{i} {nearby["title"]}</div>'
+                                f'<div style="font-size:0.87rem;color:#64748b;">'
+                                f'📍 {nearby["location"]} · {dist_text}</div>',
                                 unsafe_allow_html=True,
                             )
-                        with col_action:
-                            if st.button("👁 View", key=f"view_nearby_{i}", use_container_width=True):
-                                st.session_state.view_nearby_id = nearby["id"]
+                        with col_act:
+                            st.markdown(severity_badge(sev), unsafe_allow_html=True)
 
                 st.markdown("---")
-                col_continue, col_cancel = st.columns(2)
-                with col_continue:
-                    if st.button(
-                        "➡️ Continue submitting anyway",
-                        use_container_width=True,
-                        type="primary",
-                    ):
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    if st.button("➡️ Submit anyway", use_container_width=True, type="primary"):
                         st.session_state.confirmed_despite_duplicates = True
                         st.rerun()
-                with col_cancel:
+                with cc2:
                     if st.button("❌ Cancel", use_container_width=True):
                         st.session_state.show_duplicate_warning = False
                         st.session_state.nearby_duplicate_reports = []
@@ -403,8 +367,7 @@ def render_upload_tab(
                         st.rerun()
                 return
 
-            # ── Proceed with upload ───────────────────────────────────────────
-            with st.spinner("Submitting report…"):
+            with st.spinner("Submitting your Local Lens report…"):
                 upload_result = upload_service.upload_image_bytes(
                     file_bytes=pending.get("file_bytes"),
                     original_name=pending.get("filename"),
@@ -417,7 +380,7 @@ def render_upload_tab(
                 )
 
             if upload_result.get("success"):
-                st.success("🎉 Report submitted! Thank you for helping improve your community.")
+                st.success("🎉 Report submitted to Local Lens! Thank you for helping your community.")
                 st.session_state.pending_upload = None
                 st.session_state.analyzed_file_id = None
                 st.session_state.map_picked_lat = None
