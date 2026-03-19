@@ -13,6 +13,7 @@ from src.ui.tabs.map import render_map_tab
 from src.ui.tabs.insights import render_insights_tab
 from src.ui.tabs.backup import render_backup_tab
 from src.ui.tabs.upload import render_upload_tab
+from src.ui.tabs.about import render_about_tab
 
 
 def main():
@@ -29,7 +30,6 @@ def main():
     active_theme = init_theme()
     apply_theme_css(active_theme)
 
-    # Initialise auth state
     init_auth_state()
     if "ll_auth_modal" not in st.session_state:
         st.session_state.ll_auth_modal = None
@@ -61,10 +61,7 @@ def main():
                 set_theme("dark" if new_dark else "light")
                 st.rerun()
 
-    # ── Auth modal (renders if triggered) ────────────────────────────────────
     render_auth_modal()
-
-    # ── Hero + steps ──────────────────────────────────────────────────────────
     render_hero(active_theme)
     render_onboarding_steps()
 
@@ -83,12 +80,13 @@ def main():
         "council_authed": False,
         "show_quick_upload": None,
         "active_tab": None,
-        "show_duplicate_warning": None,
+        "show_duplicate_warning": False,
         "nearby_duplicate_reports": None,
         "pending_report_data": None,
-        "confirmed_despite_duplicates": None,
+        "confirmed_despite_duplicates": False,
         "map_picked_lat": None,
         "map_picked_lon": None,
+        "upload_file_version": 0,
     }
     for key, default in defaults.items():
         if key not in st.session_state:
@@ -103,7 +101,6 @@ def main():
     latest = str(reports[0].get("upload_date", "-") if reports else "-")[:10]
     render_overview_cards(len(reports), str(top_cat), latest)
 
-    # Quick upload expander (triggered from hero CTA)
     if st.session_state.get("show_quick_upload"):
         with st.expander("📸 Quick Upload — Report an Issue", expanded=True):
             render_upload_tab(
@@ -116,12 +113,13 @@ def main():
         st.divider()
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
-    tab_upload, tab_reports, tab_map, tab_insights, tab_backup = st.tabs([
+    tab_upload, tab_reports, tab_map, tab_insights, tab_backup, tab_about = st.tabs([
         "📤 Report an Issue",
         "📋 View Reports",
         "🗺️ Map",
         "🏛 Council Insights",
         "💾 Backup",
+        "👤 About",
     ])
 
     with tab_upload:
@@ -147,6 +145,9 @@ def main():
 
     with tab_backup:
         render_backup_tab(backup_service, COUNCIL_ADMIN_PASSWORD)
+
+    with tab_about:
+        render_about_tab()
 
 
 if __name__ == "__main__":
