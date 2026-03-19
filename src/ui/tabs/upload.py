@@ -4,7 +4,7 @@ from streamlit_folium import st_folium
 
 from src.services.auth_service import get_user_id
 from src.ui.components.auth import require_auth_prompt
-from src.ui.theme import severity_badge, SEVERITY_COLOURS
+from src.ui.theme import severity_badge
 
 _CONFIDENCE_COLOURS = {
     "high":   ("#22c55e", "✓ High confidence"),
@@ -14,8 +14,27 @@ _CONFIDENCE_COLOURS = {
 
 
 def _k(name: str) -> str:
-    """Namespaced session-state key for upload form inputs."""
+    """Namespaced session-state key for upload form fields."""
     return f"uf_{name}"
+
+
+def _init_state() -> None:
+    """Ensure all required session-state keys exist on first run."""
+    defaults = {
+        "pending_upload":              None,
+        "analyzed_file_id":            None,
+        "map_picked_lat":              None,
+        "map_picked_lon":              None,
+        "show_duplicate_warning":      False,
+        "nearby_duplicate_reports":    None,
+        "pending_report_data":         None,
+        "confirmed_despite_duplicates": False,
+        # Incrementing this key forces st.file_uploader to mount a fresh widget
+        "upload_file_version":         0,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
 
 def render_upload_tab(
@@ -26,6 +45,8 @@ def render_upload_tab(
     valid_categories: list[str],
     valid_severities: list[str],
 ) -> None:
+    _init_state()
+
     st.subheader("Report a Community Issue")
 
     if not require_auth_prompt("submit a Local Lens report"):
@@ -37,6 +58,8 @@ def render_upload_tab(
     )
 
     # ── File uploader ─────────────────────────────────────────────────────────
+    # Key includes a version counter — incrementing it mounts a fresh widget,
+    # which is the only reliable way to clear a file_uploader in Streamlit.
     st.markdown(
         """
         <div class="ll-upload-zone">
@@ -51,38 +74,52 @@ def render_upload_tab(
         unsafe_allow_html=True,
     )
 
+    version = st.session_state.upload_file_version
     uploaded_file = st.file_uploader(
         "📷",
         type=["jpg", "jpeg", "png"],
         help="Supported formats: JPG, JPEG, PNG. Max 20MB.",
-        key="upload_file",
+        key=f"upload_file_{version}",
     )
 
     # ── Run AI analysis once per new file ────────────────────────────────────
     if uploaded_file is not None:
         file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-        if st.session_state.get("analyzed_file_id") != file_id:
+        if st.session_state.analyzed_file_id != file_id:
             with st.spinner("🤖 AI is analysing your image — this takes a few seconds…"):
                 result = upload_service.analyze_image(uploaded_file)
             st.session_state.analyzed_file_id = file_id
+
             if result.get("success"):
                 st.session_state.pending_upload = result
                 st.session_state.map_picked_lat = None
                 st.session_state.map_picked_lon = None
-                # Pre-seed form fields from AI output
+
+                # Pre-seed form fields — set values directly in session state.
+                # IMPORTANT: do NOT also pass index= to selectboxes that use these
+                # keys, or Streamlit will throw a "default value conflict" error.
                 a = result.get("analysis", {})
                 st.session_state[_k("title")]    = str(a.get("title") or "")
-                st.session_state[_k("category")] = a.get("category") or valid_categories[-1]
-                st.session_state[_k("severity")] = a.get("severity") or "Medium"
                 st.session_state[_k("desc")]     = str(a.get("details") or "")
                 st.session_state[_k("action")]   = str(a.get("recommended_action") or "")
                 st.session_state[_k("location")] = str(a.get("location") or "")
+
+                # Selectbox values must be a valid option string, not an index
+                ai_cat = a.get("category") or valid_categories[-1]
+                st.session_state[_k("category")] = (
+                    ai_cat if ai_cat in valid_categories else valid_categories[-1]
+                )
+                ai_sev = a.get("severity") or "Medium"
+                st.session_state[_k("severity")] = (
+                    ai_sev if ai_sev in valid_severities else "Medium"
+                )
+
                 st.toast("✅ Analysis complete! Review the pre-filled report below.", icon="🤖")
             else:
                 st.session_state.pending_upload = None
                 st.error(result.get("message", "AI analysis failed."))
 
-    pending = st.session_state.get("pending_upload")
+    pending = st.session_state.pending_upload
 
     if pending is None:
         st.info("⬆️ Upload an image above and AI will instantly fill the report for you.")
@@ -100,12 +137,13 @@ def render_upload_tab(
         st.markdown("**📷 Your Photo**")
         st.image(file_bytes, use_container_width=True)
 
-        sev  = st.session_state.get(_k("severity"), analysis.get("severity") or "Medium")
+        sev  = st.session_state.get(_k("severity"), "Medium")
         conf = str(analysis.get("ai_confidence") or "medium").lower()
         conf_colour, conf_label = _CONFIDENCE_COLOURS.get(conf, ("#f59e0b", "~ Medium confidence"))
 
         st.markdown(
-            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;'>"
+            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;"
+            f"margin-top:6px;'>"
             f"{severity_badge(sev)}"
             f"<span style='font-size:0.75rem;font-weight:600;color:{conf_colour};'>"
             f"{conf_label}</span>"
@@ -120,7 +158,7 @@ def render_upload_tab(
         if analysis.get("ollama_error"):
             st.warning(f"AI error: {analysis['ollama_error']}")
         if not analysis.get("ai_enabled"):
-            st.info("ℹ️ AI analysis is disabled. Please fill in the form manually.")
+            st.info("ℹ️ AI analysis is disabled. Fill in the form manually.")
 
     with col_form:
         st.markdown("**📝 Report Details — AI has pre-filled these for you**")
@@ -134,16 +172,12 @@ def render_upload_tab(
 
         col_cat, col_sev = st.columns(2)
         with col_cat:
-            cur_cat = st.session_state.get(_k("category"), analysis.get("category") or valid_categories[-1])
-            cat_idx = valid_categories.index(cur_cat) if cur_cat in valid_categories else len(valid_categories) - 1
-            st.selectbox("Category *", options=valid_categories, index=cat_idx, key=_k("category"))
+            # index= intentionally omitted — value comes from session state set above
+            st.selectbox("Category *", options=valid_categories, key=_k("category"))
         with col_sev:
-            cur_sev = st.session_state.get(_k("severity"), analysis.get("severity") or "Medium")
-            sev_idx = valid_severities.index(cur_sev) if cur_sev in valid_severities else 1
             st.selectbox(
                 "Severity *",
                 options=valid_severities,
-                index=sev_idx,
                 key=_k("severity"),
                 help="Low: Minor · Medium: Inconvenience · High: Safety Risk · Critical: Immediate Danger",
             )
@@ -165,12 +199,12 @@ def render_upload_tab(
     st.markdown("---")
     st.markdown("**📍 Location**")
     st.caption(
-        "Enter a street address or postcode — or click the map to drop a pin. "
+        "Enter a street address or postcode, or click the map to drop a pin. "
         "Both help the council find the issue quickly."
     )
 
-    pin_lat  = st.session_state.get("map_picked_lat")
-    pin_lon  = st.session_state.get("map_picked_lon")
+    pin_lat  = st.session_state.map_picked_lat
+    pin_lon  = st.session_state.map_picked_lon
     exif_lat = analysis.get("latitude")
     exif_lon = analysis.get("longitude")
 
@@ -183,7 +217,6 @@ def render_upload_tab(
             placeholder="e.g. High Street, Harrow, HA1 1AA",
         )
 
-        # Lat/lon — auto-updated from pin; falls back to EXIF; user can edit manually
         display_lat = pin_lat if pin_lat is not None else (exif_lat if exif_lat is not None else "")
         display_lon = pin_lon if pin_lon is not None else (exif_lon if exif_lon is not None else "")
 
@@ -194,7 +227,7 @@ def render_upload_tab(
                 value="" if display_lat == "" else str(display_lat),
                 key=_k("lat"),
                 placeholder="51.5074",
-                help="Auto-filled from map pin or photo EXIF data.",
+                help="Auto-filled from map pin or photo EXIF.",
             )
         with lonc:
             st.text_input(
@@ -202,7 +235,7 @@ def render_upload_tab(
                 value="" if display_lon == "" else str(display_lon),
                 key=_k("lon"),
                 placeholder="-0.1278",
-                help="Auto-filled from map pin or photo EXIF data.",
+                help="Auto-filled from map pin or photo EXIF.",
             )
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -214,7 +247,7 @@ def render_upload_tab(
                 st.session_state.map_picked_lon = None
                 st.rerun()
         elif exif_lat:
-            st.info("📡 Coordinates from photo EXIF — shown on map.")
+            st.info("📡 Coordinates extracted from photo EXIF data.")
         else:
             st.caption("👉 Click the map to place a pin at the exact location.")
 
@@ -263,26 +296,25 @@ def render_upload_tab(
                 st.session_state.map_picked_lon = new_lon
                 st.rerun()
 
-    # ── SECTION 3: Submit / Clear ─────────────────────────────────────────────
+    # ── SECTION 3: Duplicate warning + Submit / Clear ─────────────────────────
     st.markdown("---")
 
-    # Duplicate warning (shown inline before final submit)
-    if st.session_state.get("show_duplicate_warning"):
-        nearby_reports = st.session_state.get("nearby_duplicate_reports") or []
+    if st.session_state.show_duplicate_warning:
+        nearby_reports = st.session_state.nearby_duplicate_reports or []
         if nearby_reports:
             st.warning("⚠️ **Similar reports already exist nearby!**")
+            cat_label = st.session_state.get(_k("category"), "")
             st.markdown(
                 "We found **{}** nearby **{}** report{}. Review before submitting.".format(
-                    len(nearby_reports),
-                    st.session_state.get(_k("category"), ""),
+                    len(nearby_reports), cat_label,
                     "s" if len(nearby_reports) != 1 else "",
                 )
             )
             for i, nearby in enumerate(nearby_reports, 1):
-                sev_n = nearby["severity"]
-                dm    = nearby.get("distance_m")
+                dm = nearby.get("distance_m")
                 dist_text = (
-                    "same location name" if nearby.get("match_type") == "location_text"
+                    "same location name"
+                    if nearby.get("match_type") == "location_text"
                     else (f"~{dm}m away" if dm and dm >= 100 else "very close by")
                 )
                 with st.container(border=True):
@@ -291,12 +323,12 @@ def render_upload_tab(
                         st.markdown(
                             f"**#{i} {nearby['title']}**  \n"
                             f"<span style='font-size:0.85rem;color:#94a3b8;'>"
-                            f"📍 {nearby['location']} · {dist_text} · 📅 {nearby['upload_date']}"
-                            f"</span>",
+                            f"📍 {nearby['location']} · {dist_text} · "
+                            f"📅 {nearby['upload_date']}</span>",
                             unsafe_allow_html=True,
                         )
                     with cb:
-                        st.markdown(severity_badge(sev_n), unsafe_allow_html=True)
+                        st.markdown(severity_badge(nearby["severity"]), unsafe_allow_html=True)
 
             st.markdown("---")
             ca, cb2 = st.columns(2)
@@ -341,12 +373,11 @@ def _handle_submit(pending: dict, analysis: dict, upload_service) -> None:
     lat_text    = str(st.session_state.get(_k("lat"),      "")).strip()
     lon_text    = str(st.session_state.get(_k("lon"),      "")).strip()
 
-    # Map pin takes precedence over typed lat/lon
-    if st.session_state.get("map_picked_lat") is not None:
+    # Map pin takes precedence over manually typed coords
+    if st.session_state.map_picked_lat is not None:
         lat_text = str(st.session_state.map_picked_lat)
         lon_text = str(st.session_state.map_picked_lon)
 
-    # Validation
     if not title:
         st.warning("Please provide a report title.")
         return
@@ -367,9 +398,7 @@ def _handle_submit(pending: dict, analysis: dict, upload_service) -> None:
         )
         return
 
-    # reporter_id from authenticated session — no email needed
-    reporter_id = get_user_id()
-
+    reporter_id  = get_user_id()  # always set — auth gate above ensures login
     final_analysis = {
         **analysis,
         "title":              title,
@@ -383,7 +412,7 @@ def _handle_submit(pending: dict, analysis: dict, upload_service) -> None:
     }
 
     # Nearby duplicate check (skip if user already confirmed)
-    if not st.session_state.get("confirmed_despite_duplicates"):
+    if not st.session_state.confirmed_despite_duplicates:
         nearby = upload_service.find_nearby_similar_reports(
             latitude, longitude, category,
             location_text=location,
@@ -418,7 +447,7 @@ def _handle_submit(pending: dict, analysis: dict, upload_service) -> None:
         )
 
     if result.get("success"):
-        st.success("🎉 Report submitted to Local Lens! Thank you for helping your community.")
+        st.success("🎉 Report submitted! Thank you for helping your community.")
         _clear_upload_state()
         st.rerun()
     else:
@@ -428,13 +457,21 @@ def _handle_submit(pending: dict, analysis: dict, upload_service) -> None:
 # ── State helpers ──────────────────────────────────────────────────────────────
 
 def _clear_upload_state() -> None:
-    for key in (
-        "pending_upload", "analyzed_file_id",
-        "map_picked_lat", "map_picked_lon",
-        "show_duplicate_warning", "nearby_duplicate_reports",
-        "pending_report_data", "confirmed_despite_duplicates",
-    ):
-        st.session_state[key] = None
+    """Reset all upload form state, including forcing the file uploader to remount."""
+    # Increment version → file_uploader gets a new key → mounts fresh with no file
+    st.session_state.upload_file_version = (
+        st.session_state.get("upload_file_version", 0) + 1
+    )
 
+    st.session_state.pending_upload              = None
+    st.session_state.analyzed_file_id            = None
+    st.session_state.map_picked_lat              = None
+    st.session_state.map_picked_lon              = None
+    st.session_state.show_duplicate_warning      = False
+    st.session_state.nearby_duplicate_reports    = None
+    st.session_state.pending_report_data         = None
+    st.session_state.confirmed_despite_duplicates = False
+
+    # Remove all form field values so widgets render with empty defaults
     for name in ("title", "category", "severity", "desc", "action", "location", "lat", "lon"):
         st.session_state.pop(_k(name), None)
