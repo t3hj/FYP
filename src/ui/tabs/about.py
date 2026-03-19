@@ -27,14 +27,14 @@ def render_about_tab() -> None:
         st.markdown(
             f"""
             <div style="display:flex;flex-direction:column;align-items:center;gap:14px;">
-                <div style="width:190px;height:190px;border-radius:50%;
+                <div style="width:200px;height:260px;border-radius:24px;
                             background:linear-gradient(135deg,#4f46e5,#a855f7);
                             padding:3px;box-shadow:0 8px 32px rgba(99,102,241,0.4);">
-                    <div style="width:100%;height:100%;border-radius:50%;
+                    <div style="width:100%;height:100%;border-radius:22px;
                                 overflow:hidden;background:#0a0f1e;">
                         <img src="data:image/png;base64,{_PHOTO_B64}"
                              style="width:100%;height:100%;object-fit:cover;
-                                    object-position:center top;"
+                                    object-position:center 20%;"
                              alt="Tehj Patel" />
                     </div>
                 </div>
@@ -81,9 +81,12 @@ def render_about_tab() -> None:
                         work <em>for</em> people, not the other way around.
                     </p>
                     <p style="font-size:0.95rem;color:var(--text-secondary);
-                               line-height:1.75;margin:0;">
+                               line-height:1.75;margin:0 0 0.75rem;">
                         Local Lens is my Final Year Project and represents the culmination of three
                         years of study in software engineering, machine learning, and UX design.
+                        I designed, architected, and wrote every line of code in this application
+                        myself — from the Supabase schema and Python backend to the Streamlit UI
+                        and the custom priority scoring engine.
                     </p>
                 </div>
                 <div style="border-radius:14px;border:1px solid var(--border);
@@ -99,12 +102,18 @@ def render_about_tab() -> None:
                         else has already flagged the same problem.
                     </p>
                     <p style="font-size:0.95rem;color:var(--text-secondary);
-                               line-height:1.75;margin:0;">
+                               line-height:1.75;margin:0 0 0.75rem;">
                         I believe civic technology deserves the same level of design attention as
-                        consumer apps. Local Lens applies modern AI — vision models, geocoding,
-                        and priority scoring — to a problem that affects every resident, every day.
-                        Developing human-centred AI applications is not just a technical challenge;
-                        it is a responsibility.
+                        consumer apps. My goal was to integrate AI <em>as a tool within the
+                        product</em> — using vision models to automatically classify uploaded
+                        photos, geocoding to locate issues, and a custom scoring engine to
+                        prioritise them for council staff.
+                    </p>
+                    <p style="font-size:0.95rem;color:var(--text-secondary);
+                               line-height:1.75;margin:0;">
+                        Building human-centred AI applications is not just a technical challenge;
+                        it is a design responsibility. Every feature was conceived, engineered,
+                        and tested by me as part of this FYP.
                     </p>
                 </div>
             </div>
@@ -258,7 +267,7 @@ def render_about_tab() -> None:
                 Thank you to my dissertation supervisor and the Computer Science department
                 at Brunel University for their guidance throughout this project.
                 Special thanks to the open-source communities behind Streamlit, Supabase,
-                and Folium — and to Anthropic for building the AI that powers Local Lens.
+                and Folium whose libraries made the application possible.
             </p>
             <div style="margin-top:1.1rem;font-size:0.78rem;color:var(--text-muted);">
                 Local Lens &nbsp;·&nbsp; FYP 2025–26 &nbsp;·&nbsp;
