@@ -12,6 +12,7 @@ from config.settings import (
     SUPABASE_BUCKET,
     SUPABASE_TABLE,
 )
+from src.services.notification_service import notify_status_change
 from src.database.supabase_client import get_supabase_client
 from src.services.ai_service import analyze_issue_image
 from src.utils.geocoding import geocode_location, reverse_geocode_location
@@ -451,12 +452,44 @@ class UploadService:
             updates["updated_at"] = datetime.now(timezone.utc).isoformat()
             if updates.get("status") == "Resolved" and "resolved_at" not in updates:
                 updates["resolved_at"] = datetime.now(timezone.utc).isoformat()
+
+            # Fetch current report before updating so we can compare status
+            # and include report details in the notification email
+            old_status = None
+            full_report = {}
+            try:
+                fetch = (
+                    self.client.table(self.table_name)
+                    .select("*")
+                    .eq("id", report_id)
+                    .limit(1)
+                    .execute()
+                )
+                if fetch.data:
+                    full_report = fetch.data[0]
+                    old_status  = full_report.get("status") or "Open"
+            except Exception:
+                pass
+
             result = (
                 self.client.table(self.table_name)
                 .update(updates)
                 .eq("id", report_id)
                 .execute()
             )
+
+            # Send notification if status actually changed
+            new_status = updates.get("status")
+            if new_status and new_status != old_status and full_report:
+                try:
+                    notify_status_change(
+                        report=full_report,
+                        new_status=new_status,
+                        council_notes=updates.get("council_notes", ""),
+                    )
+                except Exception:
+                    pass  # never let notification failure break the save
+
             return {"success": True, "data": result.data}
         except Exception as e:
             return {"success": False, "message": str(e)}
