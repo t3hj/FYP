@@ -2,13 +2,22 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 
+from src.services.priority_service import score_reports
+
 REPORT_STATUSES = ["Open", "In Progress", "Resolved", "Won't Fix"]
 
 STATUS_COLORS = {
-    "Open": "#ef4444",
+    "Open":        "#ef4444",
     "In Progress": "#f97316",
-    "Resolved": "#22c55e",
-    "Won't Fix": "#6b7280",
+    "Resolved":    "#22c55e",
+    "Won't Fix":   "#6b7280",
+}
+
+_BAND_ORDER = {
+    "Critical Priority": 0,
+    "High Priority":     1,
+    "Medium Priority":   2,
+    "Low Priority":      3,
 }
 
 
@@ -42,14 +51,233 @@ def render_insights_tab(reports: list[dict], council_password: str, upload_servi
         )
         return
 
-    # Two sub-tabs
-    tab_analytics, tab_manage = st.tabs(["📊 Analytics", "🛠️ Manage Reports"])
+    tab_priority, tab_analytics, tab_manage = st.tabs([
+        "🎯 Priority Queue",
+        "📊 Analytics",
+        "🛠️ Manage Reports",
+    ])
+
+    with tab_priority:
+        _render_priority_queue(reports, upload_service)
 
     with tab_analytics:
         _render_analytics(reports)
 
     with tab_manage:
         _render_manage(reports, upload_service)
+
+
+# ── Priority Queue ────────────────────────────────────────────────────────────
+
+def _render_priority_queue(reports: list[dict], upload_service) -> None:
+    st.markdown("#### AI Priority Scoring")
+    st.caption(
+        "Each report is scored 0–100 using four signals: "
+        "**AI severity** (up to 40 pts) · "
+        "**Time open** (up to 25 pts) · "
+        "**Community upvotes** (up to 20 pts) · "
+        "**Local report density** (up to 15 pts)"
+    )
+
+    # ── Controls ──────────────────────────────────────────────────────────────
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        include_resolved = st.toggle(
+            "Include resolved reports", value=False, key="pq_include_resolved"
+        )
+    with fc2:
+        band_filter = st.selectbox(
+            "Band filter",
+            ["All", "Critical Priority", "High Priority", "Medium Priority", "Low Priority"],
+            key="pq_band_filter",
+            label_visibility="collapsed",
+        )
+    with fc3:
+        top_n = st.selectbox(
+            "Show top",
+            [10, 25, 50, 100],
+            key="pq_top_n",
+            label_visibility="collapsed",
+            format_func=lambda x: f"Top {x} reports",
+        )
+
+    # ── Score all reports ──────────────────────────────────────────────────────
+    with st.spinner("Calculating priority scores…"):
+        scored = score_reports(reports)
+
+    # Filter out resolved/won't-fix unless toggled
+    if not include_resolved:
+        scored = [
+            r for r in scored
+            if str(r.get("status") or "Open").strip() not in ("Resolved", "Won't Fix")
+        ]
+
+    if band_filter != "All":
+        scored = [r for r in scored if r["_priority_band"] == band_filter]
+
+    scored = scored[:top_n]
+
+    if not scored:
+        st.info("No reports match the selected filters.")
+        return
+
+    # ── Band summary chips ────────────────────────────────────────────────────
+    band_counts: dict[str, int] = {}
+    for r in score_reports(reports):
+        b = r["_priority_band"]
+        band_counts[b] = band_counts.get(b, 0) + 1
+
+    band_colours = {
+        "Critical Priority": "#7c3aed",
+        "High Priority":     "#ef4444",
+        "Medium Priority":   "#f59e0b",
+        "Low Priority":      "#22c55e",
+    }
+    chips_html = " ".join(
+        f'<span style="display:inline-flex;align-items:center;gap:5px;'
+        f'padding:3px 10px;border-radius:999px;font-size:0.78rem;font-weight:700;'
+        f'background:{band_colours[b]}18;border:1px solid {band_colours[b]}44;'
+        f'color:{band_colours[b]};margin-right:4px;">'
+        f'● {b}: {band_counts.get(b, 0)}</span>'
+        for b in ["Critical Priority", "High Priority", "Medium Priority", "Low Priority"]
+        if band_counts.get(b, 0) > 0
+    )
+    st.markdown(chips_html, unsafe_allow_html=True)
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    # ── Ranked report cards ───────────────────────────────────────────────────
+    for rank, report in enumerate(scored, 1):
+        _render_priority_card(report, rank, upload_service)
+
+
+def _render_priority_card(report: dict, rank: int, upload_service) -> None:
+    score     = report["_priority_score"]
+    band      = report["_priority_band"]
+    colour    = report["_priority_colour"]
+    breakdown = report["_priority_breakdown"]
+
+    title    = str(report.get("title") or report.get("filename") or "Untitled")[:70]
+    cat      = str(report.get("category") or "Unknown")
+    loc      = str(report.get("location") or "Unknown")
+    sev      = str(report.get("severity") or "Medium")
+    status   = str(report.get("status") or "Open")
+    date_raw = str(report.get("upload_date") or "")[:10]
+    upvotes  = int(report.get("upvotes") or 0)
+    report_id = str(report.get("id", ""))
+
+    # Days open
+    from src.services.priority_service import _parse_date
+    dt = _parse_date(report.get("upload_date") or report.get("created_at"))
+    days_open = (
+        int((datetime.now(timezone.utc) - dt).days) if dt else None
+    )
+
+    status_color = STATUS_COLORS.get(status, "#6b7280")
+
+    with st.container(border=True):
+        header_col, score_col = st.columns([6, 1])
+
+        with header_col:
+            # Rank + title + badges
+            st.markdown(
+                f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>"
+                f"<span style='font-size:1.1rem;font-weight:800;color:{colour};'>"
+                f"#{rank}</span>"
+                f"<span style='font-weight:700;font-size:0.97rem;'>{title}</span>"
+                f"<span style='background:{colour}22;color:{colour};"
+                f"border:1px solid {colour}55;border-radius:999px;"
+                f"padding:2px 9px;font-size:0.75rem;font-weight:700;'>{band}</span>"
+                f"<span style='background:{status_color}22;color:{status_color};"
+                f"border:1px solid {status_color}44;border-radius:999px;"
+                f"padding:2px 9px;font-size:0.72rem;font-weight:600;'>{status}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            # Meta row
+            meta_parts = [f"🏷️ {cat}", f"📍 {loc}", f"🔴 {sev}"]
+            if days_open is not None:
+                meta_parts.append(f"⏱️ {days_open}d open")
+            if upvotes:
+                meta_parts.append(f"▲ {upvotes} votes")
+            st.markdown(
+                "<span style='font-size:0.8rem;color:#94a3b8;'>"
+                + " &nbsp;|&nbsp; ".join(meta_parts)
+                + "</span>",
+                unsafe_allow_html=True,
+            )
+
+        with score_col:
+            # Circular-ish score badge
+            st.markdown(
+                f"<div style='text-align:center;padding-top:4px;'>"
+                f"<div style='font-size:1.8rem;font-weight:800;color:{colour};'>{score:.0f}</div>"
+                f"<div style='font-size:0.68rem;color:#94a3b8;letter-spacing:0.04em;'>/ 100</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        # Score breakdown bar chart
+        with st.expander("📊 Score breakdown & quick actions"):
+            bar_col, action_col = st.columns([3, 2])
+
+            with bar_col:
+                st.markdown("**Score components**")
+                components = [
+                    ("Severity (AI)",    breakdown["severity"],  40, "#6366f1"),
+                    ("Time open",        breakdown["time_open"], 25, "#f59e0b"),
+                    ("Community votes",  breakdown["votes"],     20, "#22c55e"),
+                    ("Local density",    breakdown["density"],   15, "#ef4444"),
+                ]
+                for label, pts, max_pts, bar_colour in components:
+                    pct = int((pts / max_pts) * 100) if max_pts else 0
+                    st.markdown(
+                        f"<div style='margin-bottom:8px;'>"
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"font-size:0.8rem;margin-bottom:3px;'>"
+                        f"<span style='color:#94a3b8;'>{label}</span>"
+                        f"<span style='font-weight:700;color:#f1f5f9;'>{pts:.1f} / {max_pts}</span>"
+                        f"</div>"
+                        f"<div style='background:#1e2d45;border-radius:999px;height:7px;'>"
+                        f"<div style='background:{bar_colour};width:{pct}%;height:7px;"
+                        f"border-radius:999px;transition:width 0.4s ease;'></div>"
+                        f"</div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+            with action_col:
+                st.markdown("**Quick actions**")
+                if upload_service and report_id:
+                    new_status = st.selectbox(
+                        "Set status",
+                        REPORT_STATUSES,
+                        index=REPORT_STATUSES.index(status) if status in REPORT_STATUSES else 0,
+                        key=f"pq_status_{report_id}",
+                        label_visibility="collapsed",
+                    )
+                    assignee = st.text_input(
+                        "Assign to",
+                        value=str(report.get("assigned_to") or ""),
+                        placeholder="Officer name or email",
+                        key=f"pq_assign_{report_id}",
+                        label_visibility="collapsed",
+                    )
+                    if st.button(
+                        "💾 Save", key=f"pq_save_{report_id}", use_container_width=True
+                    ):
+                        updates = {
+                            "status": new_status,
+                            "assigned_to": assignee or None,
+                        }
+                        if new_status == "Resolved":
+                            updates["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                        res = upload_service.update_report(report_id, updates)
+                        if res.get("success"):
+                            st.toast("✅ Updated!", icon="✅")
+                            st.rerun()
+                        else:
+                            st.error(res.get("message", "Update failed."))
+                else:
+                    st.caption("Upload service unavailable.")
 
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
@@ -72,14 +300,15 @@ def _render_analytics(reports: list[dict]) -> None:
     else:
         filtered_df = df
 
-    # Key metrics
     st.divider()
     m1, m2, m3, m4 = st.columns(4)
     with m1:
         st.metric("Total Reports", len(filtered_df))
     with m2:
-        high = len(filtered_df[filtered_df.get("severity", pd.Series()).isin(["Critical", "High"])]) \
+        high = (
+            len(filtered_df[filtered_df.get("severity", pd.Series()).isin(["Critical", "High"])])
             if "severity" in filtered_df.columns else 0
+        )
         st.metric("🚨 High Priority", high)
     with m3:
         avg = len(filtered_df) / max((date_end - date_start).days + 1, 1)
@@ -117,7 +346,6 @@ def _render_analytics(reports: list[dict]) -> None:
 
 def _render_manage(reports: list[dict], upload_service) -> None:
 
-    # Status pipeline summary
     st.markdown("#### Status Pipeline")
     pipeline_cols = st.columns(4)
     for col, status in zip(pipeline_cols, REPORT_STATUSES):
@@ -134,8 +362,6 @@ def _render_manage(reports: list[dict], upload_service) -> None:
             )
 
     st.divider()
-
-    # ── Bulk edit table ────────────────────────────────────────────────────────
     st.markdown("#### Bulk Edit")
     st.caption("Edit Status or Assigned To inline, then click Save.")
 
@@ -164,14 +390,14 @@ def _render_manage(reports: list[dict], upload_service) -> None:
     else:
         rows = [
             {
-                "ID": str(r.get("id", "")),
-                "Title": (r.get("title") or r.get("filename") or "Untitled")[:50],
-                "Category": r.get("category", "Unknown"),
-                "Severity": r.get("severity", "Medium"),
-                "Status": r.get("status") or "Open",
+                "ID":          str(r.get("id", "")),
+                "Title":       (r.get("title") or r.get("filename") or "Untitled")[:50],
+                "Category":    r.get("category", "Unknown"),
+                "Severity":    r.get("severity", "Medium"),
+                "Status":      r.get("status") or "Open",
                 "Assigned To": r.get("assigned_to") or "",
-                "Location": str(r.get("location") or "")[:40],
-                "Date": str(r.get("upload_date", ""))[:10],
+                "Location":    str(r.get("location") or "")[:40],
+                "Date":        str(r.get("upload_date", ""))[:10],
             }
             for r in filtered
         ]
@@ -180,20 +406,18 @@ def _render_manage(reports: list[dict], upload_service) -> None:
         edited = st.data_editor(
             df_orig,
             column_config={
-                "ID": st.column_config.TextColumn("ID", disabled=True, width="small"),
-                "Title": st.column_config.TextColumn("Title", disabled=True, width="large"),
-                "Category": st.column_config.TextColumn("Category", disabled=True),
-                "Severity": st.column_config.SelectboxColumn(
-                    "Severity",
-                    options=["Low", "Medium", "High", "Critical"],
-                    disabled=True,
+                "ID":          st.column_config.TextColumn("ID", disabled=True, width="small"),
+                "Title":       st.column_config.TextColumn("Title", disabled=True, width="large"),
+                "Category":    st.column_config.TextColumn("Category", disabled=True),
+                "Severity":    st.column_config.SelectboxColumn(
+                    "Severity", options=["Low", "Medium", "High", "Critical"], disabled=True
                 ),
-                "Status": st.column_config.SelectboxColumn(
+                "Status":      st.column_config.SelectboxColumn(
                     "Status", options=REPORT_STATUSES, required=True
                 ),
                 "Assigned To": st.column_config.TextColumn("Assigned To"),
-                "Location": st.column_config.TextColumn("Location", disabled=True),
-                "Date": st.column_config.TextColumn("Date", disabled=True, width="small"),
+                "Location":    st.column_config.TextColumn("Location", disabled=True),
+                "Date":        st.column_config.TextColumn("Date", disabled=True, width="small"),
             },
             use_container_width=True,
             hide_index=True,
@@ -215,7 +439,7 @@ def _render_manage(reports: list[dict], upload_service) -> None:
                         res = upload_service.update_report(
                             row["ID"],
                             {
-                                "status": row["Status"],
+                                "status":      row["Status"],
                                 "assigned_to": row["Assigned To"] or None,
                             },
                         )
@@ -227,8 +451,6 @@ def _render_manage(reports: list[dict], upload_service) -> None:
                     st.error("Upload service unavailable.")
 
     st.divider()
-
-    # ── Individual report editor ───────────────────────────────────────────────
     st.markdown("#### Edit Individual Report")
 
     options = {
@@ -290,8 +512,8 @@ def _render_manage(reports: list[dict], upload_service) -> None:
 
             if saved and upload_service:
                 updates = {
-                    "status": new_status,
-                    "assigned_to": new_assigned or None,
+                    "status":        new_status,
+                    "assigned_to":   new_assigned or None,
                     "council_notes": new_notes or None,
                 }
                 if new_status == "Resolved" and current_status != "Resolved":
