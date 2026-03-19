@@ -461,6 +461,28 @@ class UploadService:
         except Exception as e:
             return {"success": False, "message": str(e)}
 
+    def delete_report(self, report_id) -> dict:
+        """
+        Permanently delete a report by ID.
+        Also removes any associated votes rows to keep the DB clean.
+        Storage object is NOT deleted (Supabase Storage has its own retention).
+        """
+        try:
+            # Remove votes first (foreign key may not cascade automatically)
+            try:
+                self.client.table("votes").delete().eq(
+                    "report_id", str(report_id)
+                ).execute()
+            except Exception:
+                pass  # votes table may not exist yet — non-fatal
+
+            self.client.table(self.table_name).delete().eq(
+                "id", report_id
+            ).execute()
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
     def add_vote(self, report_id: str, user_id: str) -> dict:
         """
         Record an upvote atomically via Supabase RPC.

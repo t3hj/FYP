@@ -6,13 +6,15 @@ from src.ui.components.report_card import render_report_card
 from src.ui.theme import SEVERITY_COLOURS
 
 STATUS_COLORS = {
-    "Open": "#ef4444",
+    "Open":        "#ef4444",
     "In Progress": "#f59e0b",
-    "Resolved": "#22c55e",
-    "Won't Fix": "#6b7280",
+    "Resolved":    "#22c55e",
+    "Won't Fix":   "#6b7280",
 }
 
 SEV_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+
+PAGE_SIZE = 10
 
 
 def _normalise_status(raw) -> str:
@@ -42,23 +44,18 @@ def render_reports_tab(reports: list[dict], upload_service=None) -> None:
         st.session_state.ll_user_votes = set(voted)
 
     # ── Summary strip ─────────────────────────────────────────────────────────
-    total   = len(reports)
-    high    = sum(1 for r in reports if r.get("severity") in ("Critical", "High"))
-    open_c  = sum(1 for r in reports if _normalise_status(r.get("status")) == "Open")
-    resolved = sum(1 for r in reports if _normalise_status(r.get("status")) == "Resolved")
+    total     = len(reports)
+    high      = sum(1 for r in reports if r.get("severity") in ("Critical", "High"))
+    open_c    = sum(1 for r in reports if _normalise_status(r.get("status")) == "Open")
+    resolved  = sum(1 for r in reports if _normalise_status(r.get("status")) == "Resolved")
     top_votes = max((int(r.get("upvotes") or 0) for r in reports), default=0)
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    with m1:
-        st.metric("Total", total)
-    with m2:
-        st.metric("🚨 High Priority", high)
-    with m3:
-        st.metric("🔄 Open", open_c)
-    with m4:
-        st.metric("✅ Resolved", resolved)
-    with m5:
-        st.metric("▲ Top Votes", top_votes)
+    with m1: st.metric("Total", total)
+    with m2: st.metric("🚨 High Priority", high)
+    with m3: st.metric("🔄 Open", open_c)
+    with m4: st.metric("✅ Resolved", resolved)
+    with m5: st.metric("▲ Top Votes", top_votes)
 
     st.divider()
 
@@ -85,11 +82,12 @@ def render_reports_tab(reports: list[dict], upload_service=None) -> None:
         )
     with f5:
         sort_by = st.selectbox(
-            "Sort", ["Most Upvoted", "Most Recent", "Oldest", "Severity ↓", "Severity ↑"],
+            "Sort",
+            ["Most Upvoted", "Most Recent", "Oldest", "Severity ↓", "Severity ↑"],
             label_visibility="collapsed",
         )
 
-    # Apply filters
+    # ── Apply filters ─────────────────────────────────────────────────────────
     filtered = reports
     if search.strip():
         t = search.lower()
@@ -107,7 +105,7 @@ def render_reports_tab(reports: list[dict], upload_service=None) -> None:
         filtered = [r for r in filtered
                     if _normalise_status(r.get("status")) == status_filter]
 
-    # Sort
+    # ── Sort ──────────────────────────────────────────────────────────────────
     if sort_by == "Most Upvoted":
         filtered = sorted(filtered, key=lambda r: int(r.get("upvotes") or 0), reverse=True)
     elif sort_by == "Most Recent":
@@ -117,18 +115,37 @@ def render_reports_tab(reports: list[dict], upload_service=None) -> None:
     elif sort_by == "Severity ↓":
         filtered = sorted(filtered, key=lambda r: SEV_ORDER.get(r.get("severity", "Low"), 9))
     elif sort_by == "Severity ↑":
-        filtered = sorted(filtered, key=lambda r: SEV_ORDER.get(r.get("severity", "Low"), 9),
+        filtered = sorted(filtered,
+                          key=lambda r: SEV_ORDER.get(r.get("severity", "Low"), 9),
                           reverse=True)
 
-    # ── Results header ────────────────────────────────────────────────────────
     if not filtered:
         st.info("📭 No reports match your filters. Try adjusting the search or dropdowns above.")
         return
 
-    # Severity chips
+    # ── Pagination — reset to page 0 whenever filters/sort change ─────────────
+    filter_sig = f"{search}|{cat_filter}|{sev_filter}|{status_filter}|{sort_by}"
+    if st.session_state.get("reports_filter_sig") != filter_sig:
+        st.session_state.reports_filter_sig = filter_sig
+        st.session_state.reports_page = 0
+
+    total_filtered = len(filtered)
+    total_pages    = max((total_filtered + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page           = int(st.session_state.get("reports_page", 0))
+    page           = max(0, min(page, total_pages - 1))   # clamp after filter changes
+
+    page_start = page * PAGE_SIZE
+    page_end   = min(page_start + PAGE_SIZE, total_filtered)
+    page_items = filtered[page_start:page_end]
+
+    # ── Results header ────────────────────────────────────────────────────────
     res_col, chip_col = st.columns([2, 3])
     with res_col:
-        st.caption(f"Showing {len(filtered)} of {total} reports")
+        st.caption(
+            f"Showing {page_start + 1}–{page_end} of {total_filtered} report"
+            f"{'s' if total_filtered != 1 else ''}"
+            + (f" (page {page + 1} of {total_pages})" if total_pages > 1 else "")
+        )
     with chip_col:
         chips = []
         fs = {s: 0 for s in VALID_SEVERITIES}
@@ -153,5 +170,42 @@ def render_reports_tab(reports: list[dict], upload_service=None) -> None:
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # ── Report cards ──────────────────────────────────────────────────────────
-    for report in filtered:
+    for report in page_items:
         render_report_card(report, upload_service=upload_service, user_id=user_id)
+
+    # ── Pagination controls ───────────────────────────────────────────────────
+    if total_pages > 1:
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        st.divider()
+
+        prev_col, info_col, next_col = st.columns([1, 2, 1])
+
+        with prev_col:
+            if st.button(
+                "← Previous",
+                key="reports_prev",
+                use_container_width=True,
+                disabled=(page == 0),
+            ):
+                st.session_state.reports_page = page - 1
+                st.rerun()
+
+        with info_col:
+            st.markdown(
+                f"<div style='text-align:center;padding:6px 0;"
+                f"font-size:0.85rem;color:#94a3b8;'>"
+                f"Page <strong style='color:#f1f5f9;'>{page + 1}</strong>"
+                f" of {total_pages}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        with next_col:
+            if st.button(
+                "Next →",
+                key="reports_next",
+                use_container_width=True,
+                disabled=(page >= total_pages - 1),
+            ):
+                st.session_state.reports_page = page + 1
+                st.rerun()

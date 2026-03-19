@@ -525,3 +525,32 @@ def _render_manage(reports: list[dict], upload_service) -> None:
                     st.rerun()
                 else:
                     st.error(f"Failed: {result.get('message')}")
+
+        # ── Delete report ─────────────────────────────────────────────────────
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        with st.expander("🗑️ Delete this report", expanded=False):
+            st.warning(
+                "**This is permanent.** The report record will be removed from the "
+                "database. The uploaded photo will remain in storage but the report "
+                "will no longer appear anywhere in Local Lens."
+            )
+            report_id = report.get("id")
+            confirm_key = f"del_confirm_{report_id}"
+            confirmed = st.checkbox(
+                f'I understand — permanently delete report #{report_id}',
+                key=confirm_key,
+            )
+            if st.button(
+                "🗑️ Delete report",
+                key=f"del_btn_{report_id}",
+                type="primary",
+                disabled=not confirmed,
+                use_container_width=True,
+            ):
+                if upload_service:
+                    res = upload_service.delete_report(report_id)
+                    if res.get("success"):
+                        st.success("Report deleted.")
+                        st.rerun()
+                    else:
+                        st.error(f"Delete failed: {res.get('message')}")
