@@ -31,7 +31,8 @@ class BackupService:
             return {"success": False, "message": str(e)}
 
     def list_backups(self):
+        """Return full file paths (as strings) so callers can stat/read them directly."""
         return sorted(
-            [f.name for f in self.backup_dir.glob("supabase_backup_*.json")],
+            [str(f) for f in self.backup_dir.glob("supabase_backup_*.json")],
             reverse=True,
         )
