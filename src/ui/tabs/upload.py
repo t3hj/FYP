@@ -2,9 +2,20 @@ import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
-from src.services.auth_service import is_logged_in, get_user_id
+from src.services.auth_service import get_user_id
 from src.ui.components.auth import require_auth_prompt
 from src.ui.theme import severity_badge, SEVERITY_COLOURS
+
+_CONFIDENCE_COLOURS = {
+    "high":   ("#22c55e", "✓ High confidence"),
+    "medium": ("#f59e0b", "~ Medium confidence"),
+    "low":    ("#ef4444", "⚠ Low confidence — please review carefully"),
+}
+
+
+def _k(name: str) -> str:
+    """Namespaced session-state key for upload form inputs."""
+    return f"uf_{name}"
 
 
 def render_upload_tab(
@@ -17,7 +28,6 @@ def render_upload_tab(
 ) -> None:
     st.subheader("Report a Community Issue")
 
-    # ── Auth gate ─────────────────────────────────────────────────────────────
     if not require_auth_prompt("submit a Local Lens report"):
         return
 
@@ -26,6 +36,7 @@ def render_upload_tab(
         "the entire report** for you. Review, adjust if needed, and submit."
     )
 
+    # ── File uploader ─────────────────────────────────────────────────────────
     st.markdown(
         """
         <div class="ll-upload-zone">
@@ -33,7 +44,7 @@ def render_upload_tab(
             <div class="ll-upload-title">Drag and drop your photo here</div>
             <div class="ll-upload-subtitle">or click below to browse files</div>
             <div class="ll-upload-requirements">
-                Supported formats: JPG, JPEG, PNG • Max 20MB per file
+                Supported formats: JPG, JPEG, PNG · Max 20MB
             </div>
         </div>
         """,
@@ -47,9 +58,10 @@ def render_upload_tab(
         key="upload_file",
     )
 
+    # ── Run AI analysis once per new file ────────────────────────────────────
     if uploaded_file is not None:
         file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-        if st.session_state.analyzed_file_id != file_id:
+        if st.session_state.get("analyzed_file_id") != file_id:
             with st.spinner("🤖 AI is analysing your image — this takes a few seconds…"):
                 result = upload_service.analyze_image(uploaded_file)
             st.session_state.analyzed_file_id = file_id
@@ -57,334 +69,372 @@ def render_upload_tab(
                 st.session_state.pending_upload = result
                 st.session_state.map_picked_lat = None
                 st.session_state.map_picked_lon = None
+                # Pre-seed form fields from AI output
+                a = result.get("analysis", {})
+                st.session_state[_k("title")]    = str(a.get("title") or "")
+                st.session_state[_k("category")] = a.get("category") or valid_categories[-1]
+                st.session_state[_k("severity")] = a.get("severity") or "Medium"
+                st.session_state[_k("desc")]     = str(a.get("details") or "")
+                st.session_state[_k("action")]   = str(a.get("recommended_action") or "")
+                st.session_state[_k("location")] = str(a.get("location") or "")
                 st.toast("✅ Analysis complete! Review the pre-filled report below.", icon="🤖")
             else:
                 st.session_state.pending_upload = None
                 st.error(result.get("message", "AI analysis failed."))
 
-    pending = st.session_state.pending_upload
+    pending = st.session_state.get("pending_upload")
 
     if pending is None:
         st.info("⬆️ Upload an image above and AI will instantly fill the report for you.")
         return
 
-    analysis = pending.get("analysis", {})
+    analysis   = pending.get("analysis", {})
     file_bytes = pending.get("file_bytes", b"")
-    filename = pending.get("filename", "image")
+    filename   = pending.get("filename", "image")
 
-    if "map_picked_lat" not in st.session_state:
-        st.session_state.map_picked_lat = None
-    if "map_picked_lon" not in st.session_state:
-        st.session_state.map_picked_lon = None
-
+    # ── SECTION 1: Photo + Report Details ────────────────────────────────────
+    st.markdown("---")
     col_img, col_form = st.columns([1, 2], gap="large")
 
     with col_img:
         st.markdown("**📷 Your Photo**")
         st.image(file_bytes, use_container_width=True)
-        sev = analysis.get("severity") or "Medium"
+
+        sev  = st.session_state.get(_k("severity"), analysis.get("severity") or "Medium")
+        conf = str(analysis.get("ai_confidence") or "medium").lower()
+        conf_colour, conf_label = _CONFIDENCE_COLOURS.get(conf, ("#f59e0b", "~ Medium confidence"))
+
         st.markdown(
-            f"<span class='ll-meta-text'>AI severity assessment</span> {severity_badge(sev)}",
+            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;'>"
+            f"{severity_badge(sev)}"
+            f"<span style='font-size:0.75rem;font-weight:600;color:{conf_colour};'>"
+            f"{conf_label}</span>"
+            f"</div>",
             unsafe_allow_html=True,
         )
         st.caption(f"File: {filename}")
+
         if analysis.get("ai_raw"):
             with st.expander("🔍 Raw AI output"):
                 st.code(analysis["ai_raw"], language="json")
         if analysis.get("ollama_error"):
             st.warning(f"AI error: {analysis['ollama_error']}")
+        if not analysis.get("ai_enabled"):
+            st.info("ℹ️ AI analysis is disabled. Please fill in the form manually.")
 
     with col_form:
         st.markdown("**📝 Report Details — AI has pre-filled these for you**")
-        st.caption("✏️ All fields are editable. Correct anything the AI got wrong, then submit.")
+        st.caption("✏️ All fields are editable. Correct anything the AI got wrong.")
 
-        # ── Form ─────────────────────────────────────────────────────────────
-        with st.form("submit_report_form_top"):
-            st.markdown("#### Essential Information")
-            title = st.text_input(
-                "Report Title *",
-                value=str(analysis.get("title") or ""),
-                placeholder="Short one-line summary of the issue",
+        st.text_input(
+            "Report Title *",
+            key=_k("title"),
+            placeholder="Short one-line summary of the issue",
+        )
+
+        col_cat, col_sev = st.columns(2)
+        with col_cat:
+            cur_cat = st.session_state.get(_k("category"), analysis.get("category") or valid_categories[-1])
+            cat_idx = valid_categories.index(cur_cat) if cur_cat in valid_categories else len(valid_categories) - 1
+            st.selectbox("Category *", options=valid_categories, index=cat_idx, key=_k("category"))
+        with col_sev:
+            cur_sev = st.session_state.get(_k("severity"), analysis.get("severity") or "Medium")
+            sev_idx = valid_severities.index(cur_sev) if cur_sev in valid_severities else 1
+            st.selectbox(
+                "Severity *",
+                options=valid_severities,
+                index=sev_idx,
+                key=_k("severity"),
+                help="Low: Minor · Medium: Inconvenience · High: Safety Risk · Critical: Immediate Danger",
             )
 
-            col_cat, col_sev = st.columns(2)
-            with col_cat:
-                ai_category = str(analysis.get("category") or "Other")
-                cat_index = (
-                    valid_categories.index(ai_category)
-                    if ai_category in valid_categories
-                    else len(valid_categories) - 1
-                )
-                category = st.selectbox("Category *", options=valid_categories, index=cat_index)
-            with col_sev:
-                ai_severity = str(analysis.get("severity") or "Medium")
-                sev_index = (
-                    valid_severities.index(ai_severity)
-                    if ai_severity in valid_severities
-                    else 1
-                )
-                severity = st.selectbox(
-                    "Severity *",
-                    options=valid_severities,
-                    index=sev_index,
-                    help="Low: Minor | Medium: Inconvenience | High: Safety Risk | Critical: Immediate Danger",
-                )
+        st.text_area(
+            "Description *",
+            key=_k("desc"),
+            height=110,
+            placeholder="Describe what you see and why it's a problem…",
+        )
+        st.text_area(
+            "Recommended Action",
+            key=_k("action"),
+            height=75,
+            placeholder="What should the council do?",
+        )
 
-            st.markdown("#### Details")
-            description = st.text_area(
-                "Description *",
-                value=str(analysis.get("details") or ""),
-                height=100,
-                placeholder="Describe what you see and why it's a problem…",
+    # ── SECTION 2: Location — address left, map right ─────────────────────────
+    st.markdown("---")
+    st.markdown("**📍 Location**")
+    st.caption(
+        "Enter a street address or postcode — or click the map to drop a pin. "
+        "Both help the council find the issue quickly."
+    )
+
+    pin_lat  = st.session_state.get("map_picked_lat")
+    pin_lon  = st.session_state.get("map_picked_lon")
+    exif_lat = analysis.get("latitude")
+    exif_lon = analysis.get("longitude")
+
+    loc_col, map_col = st.columns([1, 2], gap="large")
+
+    with loc_col:
+        st.text_input(
+            "Street address, landmark or postcode *",
+            key=_k("location"),
+            placeholder="e.g. High Street, Harrow, HA1 1AA",
+        )
+
+        # Lat/lon — auto-updated from pin; falls back to EXIF; user can edit manually
+        display_lat = pin_lat if pin_lat is not None else (exif_lat if exif_lat is not None else "")
+        display_lon = pin_lon if pin_lon is not None else (exif_lon if exif_lon is not None else "")
+
+        lc, lonc = st.columns(2)
+        with lc:
+            st.text_input(
+                "Latitude",
+                value="" if display_lat == "" else str(display_lat),
+                key=_k("lat"),
+                placeholder="51.5074",
+                help="Auto-filled from map pin or photo EXIF data.",
             )
-            recommended_action = st.text_area(
-                "Recommended Action",
-                value=str(analysis.get("recommended_action") or ""),
-                height=80,
-                placeholder="What should the council do?",
-            )
-
-            st.markdown("#### Location Information")
-            location = st.text_input(
-                "Street Address or Landmark *",
-                value=str(analysis.get("location") or ""),
-                placeholder="e.g., Main Street near Town Hall, or postcode SW1A 1AA",
-            )
-
-            col_lat, col_lon = st.columns(2)
-            with col_lat:
-                lat_default = st.session_state.map_picked_lat or analysis.get("latitude")
-                latitude_text = st.text_input(
-                    "Latitude",
-                    value="" if lat_default is None else str(lat_default),
-                    placeholder="e.g. 51.5074",
-                    help="Auto-filled from map pin or image EXIF data.",
-                )
-            with col_lon:
-                lon_default = st.session_state.map_picked_lon or analysis.get("longitude")
-                longitude_text = st.text_input(
-                    "Longitude",
-                    value="" if lon_default is None else str(lon_default),
-                    placeholder="e.g. -0.1278",
-                    help="Auto-filled from map pin or image EXIF data.",
-                )
-
-            st.markdown("#### Your Contact Info")
-            reporter_email = st.text_input(
-                "Email Address (optional)",
-                value="",
-                placeholder="you@example.com",
-                help="Used only to prevent duplicate submissions.",
+        with lonc:
+            st.text_input(
+                "Longitude",
+                value="" if display_lon == "" else str(display_lon),
+                key=_k("lon"),
+                placeholder="-0.1278",
+                help="Auto-filled from map pin or photo EXIF data.",
             )
 
-            st.markdown("---")
-            col_submit, col_clear = st.columns([3, 1])
-            with col_submit:
-                submit_report = st.form_submit_button(
-                    "✅ Submit Report to Local Lens", use_container_width=True, type="primary"
-                )
-            with col_clear:
-                clear_btn = st.form_submit_button("🗑️ Clear", use_container_width=True)
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-        # ── Map picker (outside form) ─────────────────────────────────────────
-        c_lat = st.session_state.map_picked_lat or analysis.get("latitude") or 51.5074
-        c_lon = st.session_state.map_picked_lon or analysis.get("longitude") or -0.1278
-        has_pin = st.session_state.map_picked_lat is not None
-
-        with st.expander(
-            "📍 Pin exact location on map" + (" ✅" if has_pin else ""),
-            expanded=has_pin,
-        ):
-            st.caption("Click the map to drop a pin. This overrides the coordinates above.")
-
-            picker_map = folium.Map(
-                location=[c_lat, c_lon],
-                zoom_start=15,
-                tiles="CartoDB positron",
-                control_scale=True,
-            )
-            if has_pin:
-                folium.Marker(
-                    [st.session_state.map_picked_lat, st.session_state.map_picked_lon],
-                    tooltip="📍 Your pinned location",
-                    icon=folium.Icon(color="blue", icon="map-pin", prefix="fa"),
-                ).add_to(picker_map)
-
-            map_result = st_folium(
-                picker_map,
-                use_container_width=True,
-                height=340,
-                key="upload_location_picker",
-                returned_objects=["last_clicked"],
-            )
-
-            if map_result and map_result.get("last_clicked"):
-                clicked = map_result["last_clicked"]
-                new_lat = round(clicked["lat"], 6)
-                new_lon = round(clicked["lng"], 6)
-                if (new_lat != st.session_state.map_picked_lat
-                        or new_lon != st.session_state.map_picked_lon):
-                    st.session_state.map_picked_lat = new_lat
-                    st.session_state.map_picked_lon = new_lon
-                    st.rerun()
-
-            if has_pin:
-                pc1, pc2 = st.columns([3, 1])
-                with pc1:
-                    st.success(
-                        f"📍 Pinned at {st.session_state.map_picked_lat}, "
-                        f"{st.session_state.map_picked_lon}"
-                    )
-                with pc2:
-                    if st.button("🗑️ Clear pin", key="clear_map_pin", use_container_width=True):
-                        st.session_state.map_picked_lat = None
-                        st.session_state.map_picked_lon = None
-                        st.rerun()
-            else:
-                st.info("👆 Click the map to drop a pin at the exact problem location.")
-
-        # ── Submission logic ──────────────────────────────────────────────────
-        if clear_btn:
-            st.session_state.pending_upload = None
-            st.session_state.analyzed_file_id = None
-            st.session_state.map_picked_lat = None
-            st.session_state.map_picked_lon = None
-            st.rerun()
-
-        if submit_report:
-            if st.session_state.map_picked_lat is not None:
-                latitude_text = str(st.session_state.map_picked_lat)
-                longitude_text = str(st.session_state.map_picked_lon)
-
-            try:
-                latitude = float(latitude_text) if latitude_text.strip() else None
-                longitude = float(longitude_text) if longitude_text.strip() else None
-            except ValueError:
-                st.error("Latitude and longitude must be valid numbers.")
-                return
-
-            if (latitude is None or longitude is None) and not location.strip():
-                st.warning(
-                    "📍 No location found. "
-                    "Either drop a pin on the map or enter a street name / postcode."
-                )
-                return
-
-            if not title.strip():
-                st.warning("Please provide a report title.")
-                return
-
-            reporter_id = reporter_email.strip() or get_user_id() or None
-
-            final_analysis = {
-                **analysis,
-                "title": title,
-                "category": category,
-                "severity": severity,
-                "details": description,
-                "recommended_action": recommended_action,
-                "location": location,
-                "latitude": latitude,
-                "longitude": longitude,
-            }
-
-            # ── Nearby duplicate check ────────────────────────────────────────
-            nearby_reports = []
-            if latitude is not None and longitude is not None:
-                nearby_reports = upload_service.find_nearby_similar_reports(
-                    latitude, longitude, category, location_text=location, radius_km=0.5
-                )
-            elif location:
-                nearby_reports = upload_service.find_nearby_similar_reports(
-                    None, None, category, location_text=location
-                )
-
-            if nearby_reports and not st.session_state.get("show_duplicate_warning"):
-                st.session_state.nearby_duplicate_reports = nearby_reports
-                st.session_state.pending_report_data = {
-                    "file_bytes": pending.get("file_bytes"),
-                    "filename": pending.get("filename"),
-                    "content_type": pending.get("content_type"),
-                    "location": location,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "reporter_id": reporter_id,
-                    "analysis": final_analysis,
-                }
-                st.session_state.show_duplicate_warning = True
-                st.rerun()
-
-            if st.session_state.get("show_duplicate_warning") and st.session_state.get("confirmed_despite_duplicates"):
-                st.session_state.show_duplicate_warning = False
-                st.session_state.confirmed_despite_duplicates = False
-                nearby_reports = []
-
-            if st.session_state.get("show_duplicate_warning") and nearby_reports:
-                st.warning("⚠️ **Similar reports already exist nearby on Local Lens!**")
-                st.markdown(
-                    "We found **{} {} issue{}** within 500 metres. "
-                    "Please review before submitting.".format(
-                        len(nearby_reports), category,
-                        "s" if len(nearby_reports) != 1 else "",
-                    )
-                )
-                for i, nearby in enumerate(nearby_reports, 1):
-                    sev = nearby["severity"]
-                    match_type = nearby.get("match_type", "proximity")
-                    if match_type == "location_text":
-                        dist_text = "same location name"
-                    elif nearby["distance_m"] is not None:
-                        dist_text = (
-                            f"~{nearby['distance_m']}m away"
-                            if nearby["distance_m"] >= 100 else "very close by"
-                        )
-                    else:
-                        dist_text = "nearby"
-
-                    with st.container(border=True):
-                        col_info, col_act = st.columns([4, 1])
-                        with col_info:
-                            st.markdown(
-                                f'<div style="font-weight:600;margin-bottom:3px;">#{i} {nearby["title"]}</div>'
-                                f'<div style="font-size:0.87rem;color:#64748b;">'
-                                f'📍 {nearby["location"]} · {dist_text}</div>',
-                                unsafe_allow_html=True,
-                            )
-                        with col_act:
-                            st.markdown(severity_badge(sev), unsafe_allow_html=True)
-
-                st.markdown("---")
-                cc1, cc2 = st.columns(2)
-                with cc1:
-                    if st.button("➡️ Submit anyway", use_container_width=True, type="primary"):
-                        st.session_state.confirmed_despite_duplicates = True
-                        st.rerun()
-                with cc2:
-                    if st.button("❌ Cancel", use_container_width=True):
-                        st.session_state.show_duplicate_warning = False
-                        st.session_state.nearby_duplicate_reports = []
-                        st.session_state.pending_report_data = None
-                        st.rerun()
-                return
-
-            with st.spinner("Submitting your Local Lens report…"):
-                upload_result = upload_service.upload_image_bytes(
-                    file_bytes=pending.get("file_bytes"),
-                    original_name=pending.get("filename"),
-                    content_type=pending.get("content_type"),
-                    manual_location=location or None,
-                    manual_latitude=latitude,
-                    manual_longitude=longitude,
-                    reporter_id=reporter_id,
-                    analysis_override=final_analysis,
-                )
-
-            if upload_result.get("success"):
-                st.success("🎉 Report submitted to Local Lens! Thank you for helping your community.")
-                st.session_state.pending_upload = None
-                st.session_state.analyzed_file_id = None
+        if pin_lat is not None:
+            st.success(f"📍 Pinned at {pin_lat:.5f}, {pin_lon:.5f}")
+            if st.button("🗑️ Clear pin", key="clear_map_pin", use_container_width=True):
                 st.session_state.map_picked_lat = None
                 st.session_state.map_picked_lon = None
                 st.rerun()
-            else:
-                st.error(upload_result.get("message", "Upload failed."))
+        elif exif_lat:
+            st.info("📡 Coordinates from photo EXIF — shown on map.")
+        else:
+            st.caption("👉 Click the map to place a pin at the exact location.")
+
+    with map_col:
+        c_lat = pin_lat or exif_lat or 51.5074
+        c_lon = pin_lon or exif_lon or -0.1278
+        zoom  = 15 if (pin_lat or exif_lat) else 13
+
+        picker_map = folium.Map(
+            location=[c_lat, c_lon],
+            zoom_start=zoom,
+            tiles="CartoDB positron",
+            control_scale=True,
+        )
+        if pin_lat is not None:
+            folium.Marker(
+                [pin_lat, pin_lon],
+                tooltip="📍 Your pinned location",
+                icon=folium.Icon(color="blue", icon="map-pin", prefix="fa"),
+            ).add_to(picker_map)
+        elif exif_lat:
+            folium.CircleMarker(
+                location=[exif_lat, exif_lon],
+                radius=9,
+                color="#6366f1",
+                fill=True,
+                fill_color="#6366f1",
+                fill_opacity=0.55,
+                tooltip="📡 Location from photo EXIF",
+            ).add_to(picker_map)
+
+        map_result = st_folium(
+            picker_map,
+            use_container_width=True,
+            height=290,
+            key="upload_location_picker",
+            returned_objects=["last_clicked"],
+        )
+
+        if map_result and map_result.get("last_clicked"):
+            clicked = map_result["last_clicked"]
+            new_lat = round(clicked["lat"], 6)
+            new_lon = round(clicked["lng"], 6)
+            if new_lat != pin_lat or new_lon != pin_lon:
+                st.session_state.map_picked_lat = new_lat
+                st.session_state.map_picked_lon = new_lon
+                st.rerun()
+
+    # ── SECTION 3: Submit / Clear ─────────────────────────────────────────────
+    st.markdown("---")
+
+    # Duplicate warning (shown inline before final submit)
+    if st.session_state.get("show_duplicate_warning"):
+        nearby_reports = st.session_state.get("nearby_duplicate_reports") or []
+        if nearby_reports:
+            st.warning("⚠️ **Similar reports already exist nearby!**")
+            st.markdown(
+                "We found **{}** nearby **{}** report{}. Review before submitting.".format(
+                    len(nearby_reports),
+                    st.session_state.get(_k("category"), ""),
+                    "s" if len(nearby_reports) != 1 else "",
+                )
+            )
+            for i, nearby in enumerate(nearby_reports, 1):
+                sev_n = nearby["severity"]
+                dm    = nearby.get("distance_m")
+                dist_text = (
+                    "same location name" if nearby.get("match_type") == "location_text"
+                    else (f"~{dm}m away" if dm and dm >= 100 else "very close by")
+                )
+                with st.container(border=True):
+                    ci, cb = st.columns([4, 1])
+                    with ci:
+                        st.markdown(
+                            f"**#{i} {nearby['title']}**  \n"
+                            f"<span style='font-size:0.85rem;color:#94a3b8;'>"
+                            f"📍 {nearby['location']} · {dist_text} · 📅 {nearby['upload_date']}"
+                            f"</span>",
+                            unsafe_allow_html=True,
+                        )
+                    with cb:
+                        st.markdown(severity_badge(sev_n), unsafe_allow_html=True)
+
+            st.markdown("---")
+            ca, cb2 = st.columns(2)
+            with ca:
+                if st.button("➡️ Submit anyway", use_container_width=True,
+                             type="primary", key="dup_submit_anyway"):
+                    st.session_state.confirmed_despite_duplicates = True
+                    st.session_state.show_duplicate_warning = False
+                    st.rerun()
+            with cb2:
+                if st.button("❌ Cancel", use_container_width=True, key="dup_cancel"):
+                    st.session_state.show_duplicate_warning = False
+                    st.session_state.nearby_duplicate_reports = None
+                    st.session_state.pending_report_data = None
+                    st.rerun()
+            return
+
+    btn_col, clear_col = st.columns([4, 1])
+    with btn_col:
+        if st.button(
+            "✅ Submit Report to Local Lens",
+            use_container_width=True,
+            type="primary",
+            key="upload_submit_btn",
+        ):
+            _handle_submit(pending, analysis, upload_service)
+    with clear_col:
+        if st.button("🗑️ Clear", use_container_width=True, key="upload_clear_btn"):
+            _clear_upload_state()
+            st.rerun()
+
+
+# ── Submit handler ─────────────────────────────────────────────────────────────
+
+def _handle_submit(pending: dict, analysis: dict, upload_service) -> None:
+    title       = str(st.session_state.get(_k("title"),    "")).strip()
+    category    = str(st.session_state.get(_k("category"), "Other"))
+    severity    = str(st.session_state.get(_k("severity"), "Medium"))
+    description = str(st.session_state.get(_k("desc"),     "")).strip()
+    action      = str(st.session_state.get(_k("action"),   "")).strip()
+    location    = str(st.session_state.get(_k("location"), "")).strip()
+    lat_text    = str(st.session_state.get(_k("lat"),      "")).strip()
+    lon_text    = str(st.session_state.get(_k("lon"),      "")).strip()
+
+    # Map pin takes precedence over typed lat/lon
+    if st.session_state.get("map_picked_lat") is not None:
+        lat_text = str(st.session_state.map_picked_lat)
+        lon_text = str(st.session_state.map_picked_lon)
+
+    # Validation
+    if not title:
+        st.warning("Please provide a report title.")
+        return
+    if not description:
+        st.warning("Please provide a description.")
+        return
+
+    try:
+        latitude  = float(lat_text)  if lat_text  else None
+        longitude = float(lon_text)  if lon_text  else None
+    except ValueError:
+        st.error("Latitude and longitude must be valid numbers.")
+        return
+
+    if latitude is None and not location:
+        st.warning(
+            "📍 No location found. Drop a pin on the map or enter a street address / postcode."
+        )
+        return
+
+    # reporter_id from authenticated session — no email needed
+    reporter_id = get_user_id()
+
+    final_analysis = {
+        **analysis,
+        "title":              title,
+        "category":           category,
+        "severity":           severity,
+        "details":            description,
+        "recommended_action": action,
+        "location":           location,
+        "latitude":           latitude,
+        "longitude":          longitude,
+    }
+
+    # Nearby duplicate check (skip if user already confirmed)
+    if not st.session_state.get("confirmed_despite_duplicates"):
+        nearby = upload_service.find_nearby_similar_reports(
+            latitude, longitude, category,
+            location_text=location,
+            radius_km=0.5,
+        )
+        if nearby:
+            st.session_state.nearby_duplicate_reports = nearby
+            st.session_state.pending_report_data = {
+                "file_bytes":   pending.get("file_bytes"),
+                "filename":     pending.get("filename"),
+                "content_type": pending.get("content_type"),
+                "location":     location,
+                "latitude":     latitude,
+                "longitude":    longitude,
+                "reporter_id":  reporter_id,
+                "analysis":     final_analysis,
+            }
+            st.session_state.show_duplicate_warning = True
+            st.rerun()
+            return
+
+    with st.spinner("Submitting your Local Lens report…"):
+        result = upload_service.upload_image_bytes(
+            file_bytes=pending.get("file_bytes"),
+            original_name=pending.get("filename"),
+            content_type=pending.get("content_type"),
+            manual_location=location or None,
+            manual_latitude=latitude,
+            manual_longitude=longitude,
+            reporter_id=reporter_id,
+            analysis_override=final_analysis,
+        )
+
+    if result.get("success"):
+        st.success("🎉 Report submitted to Local Lens! Thank you for helping your community.")
+        _clear_upload_state()
+        st.rerun()
+    else:
+        st.error(result.get("message", "Upload failed."))
+
+
+# ── State helpers ──────────────────────────────────────────────────────────────
+
+def _clear_upload_state() -> None:
+    for key in (
+        "pending_upload", "analyzed_file_id",
+        "map_picked_lat", "map_picked_lon",
+        "show_duplicate_warning", "nearby_duplicate_reports",
+        "pending_report_data", "confirmed_despite_duplicates",
+    ):
+        st.session_state[key] = None
+
+    for name in ("title", "category", "severity", "desc", "action", "location", "lat", "lon"):
+        st.session_state.pop(_k(name), None)

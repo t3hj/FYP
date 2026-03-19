@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import hashlib
+import math
 
 from config.settings import (
     ENABLE_GEOCODING,
@@ -18,21 +19,43 @@ from src.utils.geolocation import extract_gps_from_image_bytes
 from src.utils.validators import validate_image_format
 
 
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in kilometres between two lat/lon points."""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 class UploadService:
     def __init__(self):
         self.client = get_supabase_client()
         self.table_name = SUPABASE_TABLE
         self.bucket_name = SUPABASE_BUCKET
 
+    # ── Image analysis ────────────────────────────────────────────────────────
+
     def analyze_image(self, uploaded_file):
         if uploaded_file is None:
             return {"success": False, "message": "No file selected."}
 
+        # validate_image_format reads the file — must seek back after
         if not validate_image_format(uploaded_file):
             return {
                 "success": False,
                 "message": "Invalid image format. Please upload a valid image file.",
             }
+        # Seek back so getvalue() / subsequent reads still work
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
 
         original_name = Path(uploaded_file.name).name
         file_bytes = uploaded_file.getvalue()
@@ -55,6 +78,8 @@ class UploadService:
             "file_bytes": file_bytes,
         }
 
+    # ── Upload ────────────────────────────────────────────────────────────────
+
     def upload_image(
         self,
         uploaded_file,
@@ -71,6 +96,10 @@ class UploadService:
                 "success": False,
                 "message": "Invalid image format. Please upload a valid image file.",
             }
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
 
         return self.upload_image_bytes(
             file_bytes=uploaded_file.getvalue(),
@@ -95,86 +124,71 @@ class UploadService:
         analysis_override=None,
     ):
         try:
-            analysis = dict(analysis_override) if isinstance(analysis_override, dict) else self._build_analysis(file_bytes, original_name)
+            analysis = (
+                dict(analysis_override)
+                if isinstance(analysis_override, dict)
+                else self._build_analysis(file_bytes, original_name)
+            )
 
-            category = analysis.get("category") or "Other"
-            title = analysis.get("title")
-            severity = analysis.get("severity") or "Medium"
-            details = analysis.get("details")
+            category         = analysis.get("category") or "Other"
+            title            = analysis.get("title")
+            severity         = analysis.get("severity") or "Medium"
+            details          = analysis.get("details")
             recommended_action = analysis.get("recommended_action")
-            location_hint = analysis.get("location")
-            latitude = analysis.get("latitude")
-            longitude = analysis.get("longitude")
-            ollama_error = analysis.get("ollama_error")
+            location_hint    = analysis.get("location")
+            latitude         = analysis.get("latitude")
+            longitude        = analysis.get("longitude")
+            ollama_error     = analysis.get("ollama_error")
 
-            location = manual_location or location_hint
-            latitude = manual_latitude if manual_latitude is not None else latitude
+            location  = manual_location or location_hint
+            latitude  = manual_latitude  if manual_latitude  is not None else latitude
             longitude = manual_longitude if manual_longitude is not None else longitude
 
-            if REQUIRE_AI:
-                if ollama_error:
-                    return {
-                        "success": False,
-                        "message": f"AI analysis is required but failed: {ollama_error}",
-                        "analysis": analysis,
-                    }
-                if not category:
-                    return {
-                        "success": False,
-                        "message": "AI analysis is required but no category was returned.",
-                        "analysis": analysis,
-                    }
+            if REQUIRE_AI and ollama_error:
+                return {
+                    "success": False,
+                    "message": f"AI analysis is required but failed: {ollama_error}",
+                    "analysis": analysis,
+                }
 
             if (latitude is None or longitude is None) and ENABLE_GEOCODING and location:
                 geocoded_lat, geocoded_lon = geocode_location(location)
-                if latitude is None:
-                    latitude = geocoded_lat
-                if longitude is None:
-                    longitude = geocoded_lon
+                if latitude  is None: latitude  = geocoded_lat
+                if longitude is None: longitude = geocoded_lon
 
             if REQUIRE_GEOLOCATION and (latitude is None or longitude is None):
                 return {
                     "success": False,
-                    "message": "Geolocation is required but could not be extracted. Enter a location before submitting.",
-                    "analysis": {
-                        **analysis,
-                        "location": location,
-                        "latitude": latitude,
-                        "longitude": longitude,
-                    },
+                    "message": "Geolocation is required but could not be extracted.",
+                    "analysis": {**analysis, "location": location, "latitude": latitude, "longitude": longitude},
                 }
 
-            # Compute a stable hash of the image bytes to prevent exact duplicate uploads.
+            # ── Exact-image duplicate guard ───────────────────────────────────
             image_hash = hashlib.sha256(file_bytes).hexdigest()
-
-            # Check for an existing report with the same image hash.
             try:
-                existing_hash = (
+                existing = (
                     self.client.table(self.table_name)
-                    .select("id, upload_date, created_at")
+                    .select("id")
                     .eq("image_hash", image_hash)
                     .limit(1)
                     .execute()
                 )
+                if existing and existing.data:
+                    return {
+                        "success": False,
+                        "message": "This photo has already been reported. Thank you for flagging it.",
+                    }
             except Exception:
-                existing_hash = None
+                pass
 
-            if existing_hash and existing_hash.data:
-                return {
-                    "success": False,
-                    "message": "This photo has already been reported. Thank you for flagging it.",
-                }
-
-            # Enforce a cooldown: prevent the same reporter from reporting the same issue
-            # (same category and location) within the last 4 days.
-            if reporter_id and (category and location):
+            # ── Reporter cooldown (same category + location, 4 days) ──────────
+            if reporter_id and category and location:
                 now = datetime.now(timezone.utc)
                 four_days_ago = now - timedelta(days=4)
-
                 try:
-                    recent_reports = (
+                    recent = (
                         self.client.table(self.table_name)
-                        .select("id, category, location, upload_date, created_at")
+                        .select("id, upload_date, created_at")
                         .eq("reporter_id", reporter_id)
                         .eq("category", category)
                         .eq("location", location)
@@ -182,34 +196,33 @@ class UploadService:
                         .limit(10)
                         .execute()
                     )
-                except Exception:
-                    recent_reports = None
-
-                if recent_reports and recent_reports.data:
-                    for row in recent_reports.data:
+                    for row in (recent.data or []):
                         ts_raw = row.get("upload_date") or row.get("created_at")
                         if not ts_raw:
                             continue
                         try:
-                            # Handle both plain ISO strings and ones ending with 'Z'
-                            ts_str = str(ts_raw).replace("Z", "+00:00")
-                            ts = datetime.fromisoformat(ts_str)
+                            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+                            if ts >= four_days_ago:
+                                return {
+                                    "success": False,
+                                    "message": (
+                                        "You have already reported this type of issue at this "
+                                        "location within the last 4 days. Please give the council "
+                                        "time to respond before submitting again."
+                                    ),
+                                }
                         except Exception:
                             continue
-                        # Assume timestamps without tz are UTC
-                        if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=timezone.utc)
-                        if ts >= four_days_ago:
-                            return {
-                                "success": False,
-                                "message": (
-                                    "You have already reported this type of issue at this location "
-                                    "within the last 4 days. Please give the council time to respond "
-                                    "before submitting another report for the same problem."
-                                ),
-                            }
+                except Exception:
+                    pass
 
-            object_name = f"uploads/{datetime.now(timezone.utc).strftime('%Y%m%d')}/{uuid4().hex}{Path(original_name).suffix.lower() or '.jpg'}"
+            # ── Upload to storage ─────────────────────────────────────────────
+            object_name = (
+                f"uploads/{datetime.now(timezone.utc).strftime('%Y%m%d')}/"
+                f"{uuid4().hex}{Path(original_name).suffix.lower() or '.jpg'}"
+            )
             self.client.storage.from_(self.bucket_name).upload(
                 object_name,
                 file_bytes,
@@ -217,110 +230,186 @@ class UploadService:
             )
             public_url = self.client.storage.from_(self.bucket_name).get_public_url(object_name)
 
+            # ── Insert record ─────────────────────────────────────────────────
             payload = {
-                "filename": original_name,
-                "cloud_storage_url": public_url,
-                "upload_date": datetime.now(timezone.utc).isoformat(),
-                "version": 1,
-                "category": category,
-                "title": title,
-                "severity": severity,
+                "filename":           original_name,
+                "cloud_storage_url":  public_url,
+                "upload_date":        datetime.now(timezone.utc).isoformat(),
+                "version":            1,
+                "category":           category,
+                "title":              title,
+                "severity":           severity,
                 "additional_details": details,
                 "recommended_action": recommended_action,
-                "location": location,
-                "latitude": latitude,
-                "longitude": longitude,
-                "reporter_id": reporter_id,
-                "image_hash": image_hash,
+                "location":           location,
+                "latitude":           latitude,
+                "longitude":          longitude,
+                "reporter_id":        reporter_id,
+                "image_hash":         image_hash,
             }
-            payload = {key: value for key, value in payload.items() if value is not None}
+            payload = {k: v for k, v in payload.items() if v is not None}
 
             try:
                 insert_result = self.client.table(self.table_name).insert(payload).execute()
             except Exception:
                 now_iso = datetime.now(timezone.utc).isoformat()
-                legacy_payload = {
-                    "image_path": public_url,
-                    "category": category,
-                    "title": title,
-                    "severity": severity,
-                    "location": location or "Unknown",
+                legacy = {k: v for k, v in {
+                    "image_path":         public_url,
+                    "category":           category,
+                    "title":              title,
+                    "severity":           severity,
+                    "location":           location or "Unknown",
                     "additional_details": details,
                     "recommended_action": recommended_action,
-                    "created_at": now_iso,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "reporter_id": reporter_id,
-                    "image_hash": image_hash,
-                }
-                legacy_payload = {key: value for key, value in legacy_payload.items() if value is not None}
-
+                    "created_at":         now_iso,
+                    "latitude":           latitude,
+                    "longitude":          longitude,
+                    "reporter_id":        reporter_id,
+                    "image_hash":         image_hash,
+                }.items() if v is not None}
                 try:
-                    insert_result = self.client.table(self.table_name).insert(legacy_payload).execute()
+                    insert_result = self.client.table(self.table_name).insert(legacy).execute()
                 except Exception:
-                    minimal_payload = {
-                        "image_path": public_url,
-                        "category": category,
-                        "location": location or "Unknown",
-                    }
-                    insert_result = self.client.table(self.table_name).insert(minimal_payload).execute()
+                    minimal = {"image_path": public_url, "category": category, "location": location or "Unknown"}
+                    insert_result = self.client.table(self.table_name).insert(minimal).execute()
 
             return {
                 "success": True,
                 "message": "Image uploaded successfully.",
                 "data": insert_result.data[0] if insert_result.data else payload,
                 "analysis": {
-                    "title": title,
-                    "category": category,
-                    "severity": severity,
-                    "details": details,
+                    "title":             title,
+                    "category":          category,
+                    "severity":          severity,
+                    "details":           details,
                     "recommended_action": recommended_action,
-                    "location": location,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "ollama_error": ollama_error,
+                    "location":          location,
+                    "latitude":          latitude,
+                    "longitude":         longitude,
+                    "ollama_error":      ollama_error,
                 },
             }
         except Exception as e:
             return {"success": False, "message": str(e)}
 
+    # ── Nearby duplicate detection ────────────────────────────────────────────
+
+    def find_nearby_similar_reports(
+        self,
+        latitude,
+        longitude,
+        category: str,
+        location_text: str = "",
+        radius_km: float = 0.5,
+    ) -> list[dict]:
+        """
+        Return open reports that are geographically close OR share the same
+        location text and category, so the user can decide before submitting.
+
+        Matching logic (OR):
+          1. Coordinates within radius_km AND same category
+          2. Normalised location text contains the same road/place name AND same category
+        """
+        try:
+            # Fetch open reports with coordinates
+            result = (
+                self.client.table(self.table_name)
+                .select("id, title, category, severity, location, latitude, longitude, upload_date, status")
+                .neq("status", "Resolved")
+                .neq("status", "Won't Fix")
+                .execute()
+            )
+            all_reports = result.data or []
+        except Exception:
+            return []
+
+        nearby: list[dict] = []
+
+        # Normalise location text for fuzzy matching
+        loc_norm = " ".join(location_text.lower().split()) if location_text else ""
+
+        for report in all_reports:
+            # Skip if category doesn't match
+            if str(report.get("category") or "").strip() != category.strip():
+                continue
+
+            distance_m = None
+            matched_by = None
+
+            # --- Coordinate proximity ---
+            if latitude is not None and longitude is not None:
+                try:
+                    r_lat = float(report.get("latitude") or 0)
+                    r_lon = float(report.get("longitude") or 0)
+                    if abs(r_lat) > 0.001 or abs(r_lon) > 0.001:
+                        km = _haversine_km(latitude, longitude, r_lat, r_lon)
+                        if km <= radius_km:
+                            distance_m = int(km * 1000)
+                            matched_by = "proximity"
+                except (TypeError, ValueError):
+                    pass
+
+            # --- Location text match (fallback when no coords) ---
+            if matched_by is None and loc_norm:
+                r_loc = " ".join(str(report.get("location") or "").lower().split())
+                if r_loc and (loc_norm in r_loc or r_loc in loc_norm):
+                    matched_by = "location_text"
+
+            if matched_by:
+                nearby.append({
+                    "id":         report.get("id"),
+                    "title":      report.get("title") or "Untitled",
+                    "category":   report.get("category"),
+                    "severity":   report.get("severity") or "Medium",
+                    "location":   report.get("location") or "Unknown",
+                    "upload_date": str(report.get("upload_date") or "")[:10],
+                    "distance_m": distance_m,
+                    "match_type": matched_by,
+                })
+
+        # Sort: coord matches first, then by distance
+        nearby.sort(key=lambda r: (
+            0 if r["match_type"] == "proximity" else 1,
+            r["distance_m"] if r["distance_m"] is not None else 9999,
+        ))
+        return nearby[:5]  # cap at 5 to avoid overwhelming the user
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
     def _build_analysis(self, file_bytes, filename):
-        inferred_latitude, inferred_longitude = extract_gps_from_image_bytes(file_bytes)
+        inferred_lat, inferred_lon = extract_gps_from_image_bytes(file_bytes)
         ai_result = analyze_issue_image(file_bytes, filename)
 
-        category = ai_result.get("category") or "Other"
-        # Support both old "details" key and new "description" key from AI service
+        category   = ai_result.get("category") or "Other"
         description = ai_result.get("description") or ai_result.get("details")
-        title = ai_result.get("title")
-        severity = ai_result.get("severity") or "Medium"
+        title      = ai_result.get("title")
+        severity   = ai_result.get("severity") or "Medium"
         recommended_action = ai_result.get("recommended_action")
-        location = ai_result.get("location_hint")
-        latitude = inferred_latitude
-        longitude = inferred_longitude
+        location   = ai_result.get("location_hint")
+        latitude   = inferred_lat
+        longitude  = inferred_lon
 
-        # Fallback: if Claude didn't extract location but EXIF has GPS, reverse geocode it
         if (not location or not str(location).strip()) and latitude is not None and longitude is not None:
             location = reverse_geocode_location(latitude, longitude)
 
         if (latitude is None or longitude is None) and ENABLE_GEOCODING and location:
             geocoded_lat, geocoded_lon = geocode_location(location)
-            if latitude is None:
-                latitude = geocoded_lat
-            if longitude is None:
-                longitude = geocoded_lon
+            if latitude  is None: latitude  = geocoded_lat
+            if longitude is None: longitude = geocoded_lon
 
         return {
-            "title": title,
-            "category": category,
-            "severity": severity,
-            "details": description,
+            "title":             title,
+            "category":          category,
+            "severity":          severity,
+            "details":           description,
             "recommended_action": recommended_action,
-            "location": location,
-            "latitude": latitude,
-            "longitude": longitude,
-            "ollama_error": ai_result.get("error"),
-            "ai_enabled": ai_result.get("enabled", False),
-            "ai_raw": ai_result.get("raw"),
+            "location":          location,
+            "latitude":          latitude,
+            "longitude":         longitude,
+            "ollama_error":      ai_result.get("error"),
+            "ai_enabled":        ai_result.get("enabled", False),
+            "ai_raw":            ai_result.get("raw"),
+            "ai_confidence":     ai_result.get("confidence"),
         }
 
     def list_uploaded_images(self):
@@ -344,28 +433,24 @@ class UploadService:
                     result = self.client.table(self.table_name).select("*").execute()
 
             rows = result.data or []
-            normalized_rows = []
+            normalized = []
             for row in rows:
-                normalized = dict(row)
-                normalized["filename"] = row.get("filename") or row.get("image_name") or "uploaded_image"
-                normalized["cloud_storage_url"] = row.get("cloud_storage_url") or row.get("image_path")
-                normalized["upload_date"] = row.get("upload_date") or row.get("created_at")
-                normalized_rows.append(normalized)
-
-            return normalized_rows
+                r = dict(row)
+                r["filename"]          = row.get("filename") or row.get("image_name") or "uploaded_image"
+                r["cloud_storage_url"] = row.get("cloud_storage_url") or row.get("image_path")
+                r["upload_date"]       = row.get("upload_date") or row.get("created_at")
+                normalized.append(r)
+            return normalized
         except Exception:
             return []
-        
+
     def update_report(self, report_id, updates: dict) -> dict:
         """Update a report's status, assignment, or council notes."""
         try:
-            from datetime import datetime, timezone
             updates = {k: v for k, v in updates.items() if v is not None or k in ("assigned_to", "council_notes")}
             updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-
             if updates.get("status") == "Resolved" and "resolved_at" not in updates:
                 updates["resolved_at"] = datetime.now(timezone.utc).isoformat()
-
             result = (
                 self.client.table(self.table_name)
                 .update(updates)
@@ -375,40 +460,23 @@ class UploadService:
             return {"success": True, "data": result.data}
         except Exception as e:
             return {"success": False, "message": str(e)}
-        
-    # ── Add these two methods to the UploadService class in upload_service.py ────
-# Paste them at the bottom of the class, before the closing of the class.
-
-    # ── Replace the existing add_vote method in UploadService with this version ──
-# The previous version read then wrote the upvote count (race condition).
-# This version uses a Supabase RPC for an atomic increment.
-#
-# FIRST: run this SQL in your Supabase SQL editor to create the function:
-#
-#   CREATE OR REPLACE FUNCTION increment_upvotes(report_id text)
-#   RETURNS void LANGUAGE sql AS $$
-#     UPDATE reports SET upvotes = COALESCE(upvotes, 0) + 1 WHERE id::text = report_id;
-#   $$;
-#
-# THEN replace the add_vote method with the code below.
 
     def add_vote(self, report_id: str, user_id: str) -> dict:
         """
-        Record an upvote for a report by a user.
-        Uses an atomic SQL increment via RPC to avoid race conditions.
+        Record an upvote atomically via Supabase RPC.
+        Requires this SQL function to exist:
+          CREATE OR REPLACE FUNCTION increment_upvotes(report_id text)
+          RETURNS void LANGUAGE sql AS $$
+            UPDATE reports SET upvotes = COALESCE(upvotes, 0) + 1 WHERE id::text = report_id;
+          $$;
         """
         try:
-            # Insert vote record — unique constraint prevents double-voting
             self.client.table("votes").insert({
                 "report_id": str(report_id),
-                "user_id": str(user_id),
+                "user_id":   str(user_id),
             }).execute()
-
-            # Atomic increment via Supabase RPC
             self.client.rpc("increment_upvotes", {"report_id": str(report_id)}).execute()
-
             return {"success": True}
-
         except Exception as e:
             msg = str(e)
             if "duplicate" in msg.lower() or "unique" in msg.lower():
@@ -417,22 +485,6 @@ class UploadService:
 
     def get_user_votes(self, user_id: str) -> list[str]:
         """Return list of report_id strings the user has already upvoted."""
-        try:
-            result = (
-                self.client.table("votes")
-                .select("report_id")
-                .eq("user_id", str(user_id))
-                .execute()
-            )
-            return [row["report_id"] for row in (result.data or [])]
-        except Exception:
-            return []
-
-    def get_user_votes(self, user_id: str) -> list[str]:
-        """
-        Return a list of report_id strings that this user has upvoted.
-        Used to pre-populate the voted state in the UI.
-        """
         try:
             result = (
                 self.client.table("votes")
