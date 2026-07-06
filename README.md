@@ -38,8 +38,8 @@ Local Lens is a Streamlit app for reporting community issues from photos. Reside
 ## Quick Start
 1. Clone the repository:
    ```bash
-   git clone https://github.com/t3hj/FYP.git
-   cd FYP
+   git clone https://github.com/t3hj/Local-Lens.git
+   cd Local-Lens
    ```
 
 2. Create and activate a virtual environment:
